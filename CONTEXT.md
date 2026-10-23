@@ -26,6 +26,18 @@ _Avoid_: Tip, note
 The assistant and conversation a Card was captured from.
 _Avoid_: Origin, reference
 
+**Quiz question**:
+A question with its expected answer attached to a Card, written by the assistant at Capture or by the user, rotated across Reviews in Quiz mode.
+_Avoid_: Variant, exercise
+
+**Archived**:
+A Card the user no longer wants Nudges for, still kept and searchable.
+_Avoid_: Deleted, hidden, paused
+
+**Acquired**:
+A Card the user agreed to stop reviewing after KIM judged the knowledge learned.
+_Avoid_: Mastered, completed, graduated
+
 **Tag**:
 A label grouping related Cards, suggested at Capture.
 _Avoid_: Deck, folder, category
@@ -57,3 +69,7 @@ _Avoid_: Schedule, slot
 **Capture**:
 The act of creating Cards from an AI assistant conversation through the KIM connector, after the user confirms the drafts in the conversation.
 _Avoid_: Import, sync, export
+
+**Captured Card**:
+A Card created through Capture, the unit counted against the free plan limit.
+_Avoid_: Import credit
