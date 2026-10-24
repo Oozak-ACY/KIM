@@ -31,12 +31,8 @@ A question with its expected answer attached to a Card, written by the assistant
 _Avoid_: Variant, exercise
 
 **Archived**:
-A Card the user no longer wants Nudges for, still kept and searchable.
-_Avoid_: Deleted, hidden, paused
-
-**Acquired**:
-A Card the user agreed to stop reviewing after KIM judged the knowledge learned.
-_Avoid_: Mastered, completed, graduated
+A Card that no longer gets Nudges, still kept and searchable, either by the user's choice or after accepting KIM's proposal once the Card was remembered at a six month Review.
+_Avoid_: Deleted, hidden, paused, mastered, acquired
 
 **Tag**:
 A label grouping related Cards, suggested at Capture.
@@ -55,6 +51,10 @@ _Avoid_: Post-it mode, read mode
 **Quiz mode**:
 An optional per-Card Review style where the user answers a question about the Card before the reveal, then grades themselves as Forgot, Hard or Good.
 _Avoid_: Test, exam
+
+**Chat Review**:
+A Review run by the user's AI assistant inside a conversation through the KIM connector, self-graded and counted like any other Review.
+_Avoid_: Remote review, AI review
 
 **Nudge**:
 The push notification that invites the user to a Review, phrased as a question about the Card's Cue.
