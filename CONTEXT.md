@@ -67,7 +67,7 @@ _Avoid_: Schedule, slot
 ### Capture
 
 **Capture**:
-The act of creating Cards from an AI assistant conversation through the KIM connector, after the user confirms the drafts in the conversation.
+The act of condensing an AI assistant conversation into a single Card through the KIM connector, after the user confirms the draft in the conversation.
 _Avoid_: Import, sync, export
 
 **Captured Card**:
