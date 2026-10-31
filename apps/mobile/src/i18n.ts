@@ -17,8 +17,19 @@ type Messages = {
   loadFailed: string;
   saveFailed: string;
   retry: string;
+  dueNow: string;
+  nextDue: (date: Date) => string;
+  reviewDueCards: (count: number) => string;
+  reviewProgress: (position: number, total: number) => string;
+  revealEssence: string;
+  remembered: string;
+  forgotten: string;
+  stopReview: string;
+  reviewSaveFailed: string;
   problems: Record<CardProblem, string>;
 };
+
+const DUE_DATE_FORMAT = { dateStyle: "medium", timeStyle: "short" } as const;
 
 const en: Messages = {
   cardsTitle: "Your Cards",
@@ -41,6 +52,17 @@ const en: Messages = {
   loadFailed: "Your Cards could not be loaded. Check your connection.",
   saveFailed: "The Card could not be saved. Check your connection and try again.",
   retry: "Try again",
+  dueNow: "Due now",
+  nextDue: (date) =>
+    `Next due ${date.toLocaleString("en", DUE_DATE_FORMAT)}`,
+  reviewDueCards: (count) =>
+    `Review ${count} due ${count === 1 ? "Card" : "Cards"}`,
+  reviewProgress: (position, total) => `Card ${position} of ${total}`,
+  revealEssence: "Show the Essence",
+  remembered: "I remembered",
+  forgotten: "I'd forgotten",
+  stopReview: "Stop",
+  reviewSaveFailed: "Your answer could not be saved. Check your connection and try again.",
   problems: {
     "cue-missing": "Write a Cue.",
     "cue-too-long": `Keep the Cue to ${CUE_MAX_CHARACTERS} characters.`,
@@ -71,6 +93,17 @@ const fr: Messages = {
   loadFailed: "Impossible de charger vos Cartes. Vérifiez votre connexion.",
   saveFailed: "Impossible d'enregistrer la Carte. Vérifiez votre connexion et réessayez.",
   retry: "Réessayer",
+  dueNow: "À revoir maintenant",
+  nextDue: (date) =>
+    `Prochaine échéance : ${date.toLocaleString("fr", DUE_DATE_FORMAT)}`,
+  reviewDueCards: (count) =>
+    count === 1 ? "Réviser 1 Carte à revoir" : `Réviser ${count} Cartes à revoir`,
+  reviewProgress: (position, total) => `Carte ${position} sur ${total}`,
+  revealEssence: "Afficher l'Essentiel",
+  remembered: "Je m'en souvenais",
+  forgotten: "J'avais oublié",
+  stopReview: "Arrêter",
+  reviewSaveFailed: "Impossible d'enregistrer votre réponse. Vérifiez votre connexion et réessayez.",
   problems: {
     "cue-missing": "Écrivez un Repère.",
     "cue-too-long": `Limitez le Repère à ${CUE_MAX_CHARACTERS} caractères.`,

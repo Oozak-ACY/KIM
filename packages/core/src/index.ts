@@ -1,15 +1,41 @@
+import {
+  firstSchedule,
+  nextSchedule,
+  type Grade,
+  type Schedule,
+} from "./scheduling";
+
+export type { Grade, Schedule };
+
 export type Card = {
   id: string;
   cue: string;
   essence: string;
   createdAt: Date;
+  dueAt: Date;
+  schedule: Schedule;
 };
 
 export type NewCard = Omit<Card, "id">;
 
+export type ReviewChannel = "app";
+export type ReviewMode = "recall";
+export type RecallOutcome = "remembered" | "forgotten";
+
+export type Review = {
+  cardId: string;
+  reviewedAt: Date;
+  grade: Grade;
+  channel: ReviewChannel;
+  mode: ReviewMode;
+};
+
 export type CardStore = {
   add(card: NewCard): Promise<Card>;
   list(): Promise<Card[]>;
+  /** Saves the rescheduled Card and its Review together, or neither. */
+  recordReview(card: Card, review: Review): Promise<void>;
+  listReviews(cardId: string): Promise<Review[]>;
 };
 
 export type Clock = {
@@ -19,6 +45,11 @@ export type Clock = {
 export const CUE_MAX_CHARACTERS = 100;
 export const ESSENCE_MAX_CHARACTERS = 280;
 export const ESSENCE_MAX_LINES = 3;
+
+const RECALL_GRADES: Record<RecallOutcome, Grade> = {
+  remembered: "good",
+  forgotten: "again",
+};
 
 export type CardProblem =
   | "cue-missing"
@@ -72,7 +103,12 @@ export function createCore({ clock, cards }: { clock: Clock; cards: CardStore })
       const problems = findProblems(input);
       if (problems.length > 0) return { ok: false, problems };
 
-      const card = await cards.add({ ...input, createdAt: clock.now() });
+      const now = clock.now();
+      const card = await cards.add({
+        ...input,
+        createdAt: now,
+        ...(await firstSchedule(now)),
+      });
       return { ok: true, card };
     },
 
@@ -81,6 +117,45 @@ export function createCore({ clock, cards }: { clock: Clock; cards: CardStore })
       return stored.sort(
         (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
       );
+    },
+
+    async dueCards(): Promise<Card[]> {
+      const now = clock.now();
+      const stored = await cards.list();
+      return stored
+        .filter((card) => card.dueAt <= now)
+        .sort((a, b) => a.dueAt.getTime() - b.dueAt.getTime());
+    },
+
+    async recordReview({
+      card,
+      mode,
+      outcome,
+      channel,
+    }: {
+      card: Card;
+      mode: ReviewMode;
+      outcome: RecallOutcome;
+      channel: ReviewChannel;
+    }): Promise<Card> {
+      const reviewedAt = clock.now();
+      const grade = RECALL_GRADES[outcome];
+      const reviewed = {
+        ...card,
+        ...(await nextSchedule(card, grade, reviewedAt)),
+      };
+      await cards.recordReview(reviewed, {
+        cardId: card.id,
+        reviewedAt,
+        grade,
+        channel,
+        mode,
+      });
+      return reviewed;
+    },
+
+    listReviews(cardId: string): Promise<Review[]> {
+      return cards.listReviews(cardId);
     },
   };
 }

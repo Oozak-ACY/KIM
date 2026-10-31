@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useState } from "react";
 import {
   ActivityIndicator,
+  AppState,
   FlatList,
   KeyboardAvoidingView,
   Platform,
@@ -18,6 +19,7 @@ import {
   essenceRoom,
   type Card,
   type CardProblem,
+  type RecallOutcome,
 } from "@kim/core";
 import { t } from "./src/i18n";
 import { ensureSession } from "./src/supabase";
@@ -46,14 +48,21 @@ export default function App() {
 
 function Cards() {
   const [cards, setCards] = useState<Card[] | null>(null);
+  const [dueCards, setDueCards] = useState<Card[]>([]);
   const [loadFailed, setLoadFailed] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [reviewing, setReviewing] = useState(false);
 
   const load = useCallback(async () => {
     setLoadFailed(false);
     try {
       await ensureSession();
-      setCards(await core.listCards());
+      const [listed, due] = await Promise.all([
+        core.listCards(),
+        core.dueCards(),
+      ]);
+      setCards(listed);
+      setDueCards(due);
     } catch {
       setLoadFailed(true);
     }
@@ -62,6 +71,16 @@ function Cards() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // Cards come due while the app sits in the background. Left alone during a
+  // Review, whose list of Cards must not move under the user.
+  useEffect(() => {
+    if (reviewing) return;
+    const subscription = AppState.addEventListener("change", (state) => {
+      if (state === "active") void load();
+    });
+    return () => subscription.remove();
+  }, [load, reviewing]);
 
   if (loadFailed) {
     return (
@@ -92,22 +111,108 @@ function Cards() {
     );
   }
 
+  if (reviewing) {
+    return (
+      <Reviews
+        cards={dueCards}
+        onDone={() => {
+          setReviewing(false);
+          void load();
+        }}
+      />
+    );
+  }
+
+  const dueIds = new Set(dueCards.map((card) => card.id));
+
   return (
     <View style={styles.fill}>
       <Text style={styles.title}>{t.cardsTitle}</Text>
+      {dueCards.length > 0 && (
+        <Button
+          label={t.reviewDueCards(dueCards.length)}
+          onPress={() => setReviewing(true)}
+        />
+      )}
       <FlatList
         style={styles.fill}
-        data={cards}
+        data={[...dueCards, ...cards.filter((card) => !dueIds.has(card.id))]}
         keyExtractor={(card) => card.id}
         ListEmptyComponent={<Text style={styles.message}>{t.noCards}</Text>}
         renderItem={({ item }) => (
           <View style={styles.card}>
             <Text style={styles.cue}>{item.cue}</Text>
             <Text style={styles.essence}>{item.essence}</Text>
+            <Text style={styles.due}>
+              {dueIds.has(item.id) ? t.dueNow : t.nextDue(item.dueAt)}
+            </Text>
           </View>
         )}
       />
       <Button label={t.newCard} onPress={() => setCreating(true)} />
+    </View>
+  );
+}
+
+function Reviews({ cards, onDone }: { cards: Card[]; onDone: () => void }) {
+  const [position, setPosition] = useState(0);
+  const [revealed, setRevealed] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
+  const [saving, setSaving] = useState(false);
+  const card = cards[position];
+
+  if (!card) return null;
+
+  const answer = async (outcome: RecallOutcome) => {
+    setSaving(true);
+    setSaveFailed(false);
+    try {
+      await core.recordReview({
+        card,
+        mode: "recall",
+        outcome,
+        channel: "app",
+      });
+      if (position + 1 === cards.length) {
+        onDone();
+      } else {
+        setPosition(position + 1);
+        setRevealed(false);
+      }
+    } catch {
+      setSaveFailed(true);
+    } finally {
+      setSaving(false);
+    }
+  };
+
+  return (
+    <View style={styles.fill}>
+      <Text style={styles.progress}>
+        {t.reviewProgress(position + 1, cards.length)}
+      </Text>
+      <View style={styles.centered}>
+        <Text style={styles.reviewCue}>{card.cue}</Text>
+        {revealed && <Text style={styles.reviewEssence}>{card.essence}</Text>}
+      </View>
+      {saveFailed && <Text style={styles.problem}>{t.reviewSaveFailed}</Text>}
+      {revealed ? (
+        <>
+          <Button
+            label={t.remembered}
+            onPress={() => answer("remembered")}
+            disabled={saving}
+          />
+          <Button
+            label={t.forgotten}
+            onPress={() => answer("forgotten")}
+            disabled={saving}
+          />
+        </>
+      ) : (
+        <Button label={t.revealEssence} onPress={() => setRevealed(true)} />
+      )}
+      <Button label={t.stopReview} onPress={onDone} disabled={saving} quiet />
     </View>
   );
 }
@@ -232,6 +337,15 @@ const styles = StyleSheet.create({
   },
   cue: { fontSize: 17, fontWeight: "600", marginBottom: 4 },
   essence: { fontSize: 15, color: "#333" },
+  due: { fontSize: 13, color: "#555", marginTop: 4 },
+  progress: { fontSize: 14, color: "#555", marginVertical: 16 },
+  reviewCue: { fontSize: 24, fontWeight: "700", textAlign: "center" },
+  reviewEssence: {
+    fontSize: 18,
+    color: "#333",
+    textAlign: "center",
+    marginTop: 16,
+  },
   label: { fontSize: 14, fontWeight: "600", marginTop: 12, marginBottom: 4 },
   input: {
     borderWidth: 1,

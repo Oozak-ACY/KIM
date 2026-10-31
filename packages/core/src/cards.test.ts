@@ -156,6 +156,198 @@ describe("listing Cards", () => {
   });
 });
 
+describe("due Cards", () => {
+  it("gives a new Card its first due date", async () => {
+    const { core } = setup();
+
+    const result = await core.createCard({
+      cue: "A Cue",
+      essence: "An Essence.",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      card: { dueAt: new Date("2026-01-15T09:00:00.000Z") },
+    });
+  });
+
+  it("lists the Cards due now, longest overdue first", async () => {
+    const { core, setNow } = setup();
+    await core.createCard({ cue: "First", essence: "An Essence." });
+    setNow("2026-01-16T09:00:00.000Z");
+    await core.createCard({ cue: "Second", essence: "An Essence." });
+
+    const due = await core.dueCards();
+
+    expect(due.map((card) => card.cue)).toEqual(["First", "Second"]);
+  });
+
+  it("lists nothing when there are no Cards", async () => {
+    const { core } = setup();
+
+    expect(await core.dueCards()).toEqual([]);
+  });
+});
+
+describe("reviewing a Card in Recall mode", () => {
+  const DAY = 24 * 60 * 60 * 1000;
+
+  async function newCard(core: ReturnType<typeof setup>["core"]) {
+    const result = await core.createCard({
+      cue: "A Cue",
+      essence: "An Essence.",
+    });
+    if (!result.ok) throw new Error("the Card should be valid");
+    return result.card;
+  }
+
+  it("takes a remembered Card off the due list until its next due date", async () => {
+    const { core, setNow } = setup();
+    const card = await newCard(core);
+
+    const reviewed = await core.recordReview({
+      card,
+      mode: "recall",
+      outcome: "remembered",
+      channel: "app",
+    });
+
+    expect(await core.dueCards()).toEqual([]);
+    setNow(reviewed.dueAt.toISOString());
+    expect((await core.dueCards()).map(({ id }) => id)).toEqual([card.id]);
+  });
+
+  it("shows the next due date on the listed Card", async () => {
+    const { core } = setup();
+    const card = await newCard(core);
+
+    const reviewed = await core.recordReview({
+      card,
+      mode: "recall",
+      outcome: "remembered",
+      channel: "app",
+    });
+
+    const [listed] = await core.listCards();
+    expect(listed?.dueAt).toEqual(reviewed.dueAt);
+    expect(listed?.dueAt.getTime()).toBeGreaterThan(card.dueAt.getTime());
+  });
+
+  it("brings a Card back less and less often while it is remembered", async () => {
+    const { core, setNow } = setup();
+    let card = await newCard(core);
+
+    const gaps: number[] = [];
+    for (let review = 0; review < 5; review++) {
+      setNow(card.dueAt.toISOString());
+      const reviewed = await core.recordReview({
+        card,
+        mode: "recall",
+        outcome: "remembered",
+        channel: "app",
+      });
+      gaps.push(reviewed.dueAt.getTime() - card.dueAt.getTime());
+      card = reviewed;
+    }
+
+    expect(gaps[0]).toBeGreaterThanOrEqual(DAY);
+    gaps.slice(1).forEach((gap, index) => {
+      expect(gap).toBeGreaterThan(gaps[index] as number);
+    });
+  });
+
+  it("brings a forgotten Card back sooner than a remembered one", async () => {
+    const { core } = setup();
+    const card = await newCard(core);
+    const other = await newCard(core);
+
+    const forgotten = await core.recordReview({
+      card,
+      mode: "recall",
+      outcome: "forgotten",
+      channel: "app",
+    });
+    const remembered = await core.recordReview({
+      card: other,
+      mode: "recall",
+      outcome: "remembered",
+      channel: "app",
+    });
+
+    expect(forgotten.dueAt.getTime()).toBeLessThan(remembered.dueAt.getTime());
+  });
+
+  it("shortens the wait when a well-known Card is forgotten", async () => {
+    const { core, setNow } = setup();
+    let card = await newCard(core);
+    for (let review = 0; review < 3; review++) {
+      setNow(card.dueAt.toISOString());
+      card = await core.recordReview({
+        card,
+        mode: "recall",
+        outcome: "remembered",
+        channel: "app",
+      });
+    }
+    setNow(card.dueAt.toISOString());
+    const reviewedAt = card.dueAt.getTime();
+
+    const forgotten = await core.recordReview({
+      card,
+      mode: "recall",
+      outcome: "forgotten",
+      channel: "app",
+    });
+
+    expect(forgotten.dueAt.getTime() - reviewedAt).toBeLessThan(DAY);
+  });
+
+  it('records "I remembered" as Good', async () => {
+    const { core } = setup();
+    const card = await newCard(core);
+
+    await core.recordReview({
+      card,
+      mode: "recall",
+      outcome: "remembered",
+      channel: "app",
+    });
+
+    expect(await core.listReviews(card.id)).toEqual([
+      {
+        cardId: card.id,
+        reviewedAt: new Date("2026-01-15T09:00:00.000Z"),
+        grade: "good",
+        channel: "app",
+        mode: "recall",
+      },
+    ]);
+  });
+
+  it(`records "I'd forgotten" as Again`, async () => {
+    const { core, setNow } = setup();
+    const card = await newCard(core);
+    setNow("2026-01-15T10:30:00.000Z");
+
+    await core.recordReview({
+      card,
+      mode: "recall",
+      outcome: "forgotten",
+      channel: "app",
+    });
+
+    expect(await core.listReviews(card.id)).toEqual([
+      {
+        cardId: card.id,
+        reviewedAt: new Date("2026-01-15T10:30:00.000Z"),
+        grade: "again",
+        channel: "app",
+        mode: "recall",
+      },
+    ]);
+  });
+});
+
 describe("room left in the Essence", () => {
   it("starts with the full allowance", () => {
     expect(essenceRoom("")).toEqual({ characters: 280, lines: 3 });
