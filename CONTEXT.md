@@ -4,6 +4,8 @@ A mobile memory companion that resurfaces short pieces of knowledge, captured fr
 
 ## Language
 
+French UI terms: Card is **Carte**, Cue is **Repère**, Essence is **Essentiel**. _Indice_ stays free for Hint.
+
 ### Cards
 
 **Card**:
