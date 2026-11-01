@@ -12,6 +12,14 @@ export function inMemoryCardStore(): CardStore {
     async list() {
       return [...cards];
     },
+    async setTags(cardId, tags) {
+      const index = cards.findIndex(({ id }) => id === cardId);
+      const card = cards[index];
+      if (!card) throw new Error(`Card ${cardId} not found`);
+      const tagged = { ...card, tags };
+      cards[index] = tagged;
+      return tagged;
+    },
     async recordReview(card, review) {
       const index = cards.findIndex(({ id }) => id === card.id);
       if (index === -1) throw new Error(`Card ${card.id} not found`);

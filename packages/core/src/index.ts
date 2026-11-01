@@ -11,6 +11,7 @@ export type Card = {
   id: string;
   cue: string;
   essence: string;
+  tags: string[];
   createdAt: Date;
   dueAt: Date;
   schedule: Schedule;
@@ -33,6 +34,8 @@ export type Review = {
 export type CardStore = {
   add(card: NewCard): Promise<Card>;
   list(): Promise<Card[]>;
+  /** Replaces the Card's Tags and leaves the rest of the Card alone. */
+  setTags(cardId: string, tags: string[]): Promise<Card>;
   /** Saves the rescheduled Card and its Review together, or neither. */
   recordReview(card: Card, review: Review): Promise<void>;
   listReviews(cardId: string): Promise<Review[]>;
@@ -94,6 +97,60 @@ function findProblems(input: { cue: string; essence: string }): CardProblem[] {
   return problems;
 }
 
+/** Ignores case and accents, so "energie" finds "Énergie". */
+function fold(text: string): string {
+  return text
+    .normalize("NFD")
+    .replace(/\p{Diacritic}/gu, "")
+    .toLowerCase();
+}
+
+/** Tags ignore case only: "pêche" and "péché" are different Tags. */
+function tagKey(tag: string): string {
+  return tag.normalize().toLowerCase();
+}
+
+function uniqueTags(tags: string[]): string[] {
+  const byKey = new Map<string, string>();
+  for (const tag of tags) {
+    if (!byKey.has(tagKey(tag))) byKey.set(tagKey(tag), tag);
+  }
+  return [...byKey.values()];
+}
+
+function newestFirst(cards: Card[]): Card[] {
+  return [...cards].sort(
+    (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
+  );
+}
+
+export type CardSearch = { text?: string; tag?: string };
+
+/** Keeps the Cards matching the search, in the order given. */
+export function matchingCards(
+  cards: Card[],
+  { text = "", tag }: CardSearch,
+): Card[] {
+  const words = fold(text).split(/\s+/).filter(Boolean);
+  const wantedTag = tag === undefined ? undefined : tagKey(tag);
+  return cards.filter((card) => {
+    if (
+      wantedTag !== undefined &&
+      !card.tags.some((cardTag) => tagKey(cardTag) === wantedTag)
+    ) {
+      return false;
+    }
+    const searched = fold(`${card.cue}\n${card.essence}`);
+    return words.every((word) => searched.includes(word));
+  });
+}
+
+export function tagsInUse(cards: Pick<Card, "tags">[]): string[] {
+  return uniqueTags(cards.flatMap((card) => card.tags)).sort((a, b) =>
+    fold(a).localeCompare(fold(b)),
+  );
+}
+
 export function createCore({ clock, cards }: { clock: Clock; cards: CardStore }) {
   return {
     async createCard(input: {
@@ -106,6 +163,7 @@ export function createCore({ clock, cards }: { clock: Clock; cards: CardStore })
       const now = clock.now();
       const card = await cards.add({
         ...input,
+        tags: [],
         createdAt: now,
         ...(await firstSchedule(now)),
       });
@@ -113,10 +171,16 @@ export function createCore({ clock, cards }: { clock: Clock; cards: CardStore })
     },
 
     async listCards(): Promise<Card[]> {
-      const stored = await cards.list();
-      return stored.sort(
-        (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
-      );
+      return newestFirst(await cards.list());
+    },
+
+    async searchCards(search: CardSearch): Promise<Card[]> {
+      return matchingCards(newestFirst(await cards.list()), search);
+    },
+
+    setTags(cardId: string, tags: string[]): Promise<Card> {
+      const trimmed = tags.map((tag) => tag.trim()).filter((tag) => tag !== "");
+      return cards.setTags(cardId, uniqueTags(trimmed));
     },
 
     async dueCards(): Promise<Card[]> {

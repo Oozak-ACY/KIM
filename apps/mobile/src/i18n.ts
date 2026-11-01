@@ -5,6 +5,13 @@ import { getLocales } from "expo-localization";
 type Messages = {
   cardsTitle: string;
   noCards: string;
+  noMatchingCards: string;
+  searchCards: string;
+  editTags: string;
+  closeTags: string;
+  addTag: string;
+  removeTag: (tag: string) => string;
+  tagsSaveFailed: string;
   newCard: string;
   cueLabel: string;
   cuePlaceholder: string;
@@ -34,6 +41,13 @@ const DUE_DATE_FORMAT = { dateStyle: "medium", timeStyle: "short" } as const;
 const en: Messages = {
   cardsTitle: "Your Cards",
   noCards: "No Cards yet. Add what you want to keep in mind.",
+  noMatchingCards: "No Card matches this search.",
+  searchCards: "Search your Cards",
+  editTags: "Edit Tags",
+  closeTags: "Done",
+  addTag: "Add a Tag",
+  removeTag: (tag) => `Remove the Tag ${tag}`,
+  tagsSaveFailed: "The Tags could not be saved. Check your connection and try again.",
   newCard: "New Card",
   cueLabel: "Cue",
   cuePlaceholder: "How does nuclear fusion work?",
@@ -75,6 +89,13 @@ const en: Messages = {
 const fr: Messages = {
   cardsTitle: "Vos Cartes",
   noCards: "Aucune Carte pour l'instant. Ajoutez ce que vous voulez garder en tête.",
+  noMatchingCards: "Aucune Carte ne correspond à cette recherche.",
+  searchCards: "Rechercher dans vos Cartes",
+  editTags: "Modifier les Tags",
+  closeTags: "Terminé",
+  addTag: "Ajouter un Tag",
+  removeTag: (tag) => `Retirer le Tag ${tag}`,
+  tagsSaveFailed: "Impossible d'enregistrer les Tags. Vérifiez votre connexion et réessayez.",
   newCard: "Nouvelle Carte",
   cueLabel: "Repère",
   cuePlaceholder: "Comment fonctionne la fusion nucléaire ?",

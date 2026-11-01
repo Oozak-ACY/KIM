@@ -17,6 +17,8 @@ import { StatusBar } from "expo-status-bar";
 import {
   createCore,
   essenceRoom,
+  matchingCards,
+  tagsInUse,
   type Card,
   type CardProblem,
   type RecallOutcome,
@@ -52,6 +54,8 @@ function Cards() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [creating, setCreating] = useState(false);
   const [reviewing, setReviewing] = useState(false);
+  const [searchText, setSearchText] = useState("");
+  const [selectedTag, setSelectedTag] = useState<string>();
 
   const load = useCallback(async () => {
     setLoadFailed(false);
@@ -124,6 +128,9 @@ function Cards() {
   }
 
   const dueIds = new Set(dueCards.map((card) => card.id));
+  const tags = tagsInUse(cards);
+  // The chosen Tag can vanish when it is removed from its last Card.
+  const activeTag = tags.find((tag) => tag === selectedTag);
 
   return (
     <View style={styles.fill}>
@@ -134,23 +141,177 @@ function Cards() {
           onPress={() => setReviewing(true)}
         />
       )}
+      {cards.length > 0 && (
+        <TextInput
+          style={styles.input}
+          value={searchText}
+          onChangeText={setSearchText}
+          placeholder={t.searchCards}
+          accessibilityLabel={t.searchCards}
+          autoCorrect={false}
+        />
+      )}
+      {tags.length > 0 && (
+        <ScrollView
+          horizontal
+          style={styles.tagFilter}
+          keyboardShouldPersistTaps="handled"
+          showsHorizontalScrollIndicator={false}
+        >
+          {tags.map((tag) => (
+            <Chip
+              key={tag}
+              label={tag}
+              selected={tag === activeTag}
+              onPress={() =>
+                setSelectedTag(tag === activeTag ? undefined : tag)
+              }
+            />
+          ))}
+        </ScrollView>
+      )}
       <FlatList
         style={styles.fill}
-        data={[...dueCards, ...cards.filter((card) => !dueIds.has(card.id))]}
+        data={matchingCards(
+          [...dueCards, ...cards.filter((card) => !dueIds.has(card.id))],
+          { text: searchText, tag: activeTag },
+        )}
         keyExtractor={(card) => card.id}
-        ListEmptyComponent={<Text style={styles.message}>{t.noCards}</Text>}
+        keyboardShouldPersistTaps="handled"
+        ListEmptyComponent={
+          <Text style={styles.message}>
+            {cards.length > 0 ? t.noMatchingCards : t.noCards}
+          </Text>
+        }
         renderItem={({ item }) => (
-          <View style={styles.card}>
-            <Text style={styles.cue}>{item.cue}</Text>
-            <Text style={styles.essence}>{item.essence}</Text>
-            <Text style={styles.due}>
-              {dueIds.has(item.id) ? t.dueNow : t.nextDue(item.dueAt)}
-            </Text>
-          </View>
+          <CardRow card={item} due={dueIds.has(item.id)} onTagsSaved={load} />
         )}
       />
       <Button label={t.newCard} onPress={() => setCreating(true)} />
     </View>
+  );
+}
+
+function CardRow({
+  card,
+  due,
+  onTagsSaved,
+}: {
+  card: Card;
+  due: boolean;
+  onTagsSaved: () => Promise<void>;
+}) {
+  const [editingTags, setEditingTags] = useState(false);
+
+  return (
+    <View style={styles.card}>
+      <Text style={styles.cue}>{card.cue}</Text>
+      <Text style={styles.essence}>{card.essence}</Text>
+      <Text style={styles.due}>{due ? t.dueNow : t.nextDue(card.dueAt)}</Text>
+      {editingTags ? (
+        <TagEditor
+          card={card}
+          onSaved={onTagsSaved}
+          onClose={() => setEditingTags(false)}
+        />
+      ) : (
+        <View style={styles.tags}>
+          {card.tags.map((tag) => (
+            <Chip key={tag} label={tag} />
+          ))}
+          <Chip label={t.editTags} onPress={() => setEditingTags(true)} />
+        </View>
+      )}
+    </View>
+  );
+}
+
+function TagEditor({
+  card,
+  onSaved,
+  onClose,
+}: {
+  card: Card;
+  onSaved: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const [newTag, setNewTag] = useState("");
+  const [saveFailed, setSaveFailed] = useState(false);
+  const [saving, setSaving] = useState(false);
+
+  async function save(tags: string[]) {
+    setSaving(true);
+    setSaveFailed(false);
+    try {
+      await core.setTags(card.id, tags);
+      setNewTag("");
+      // Stay disabled until card.tags is fresh: each save replaces the whole
+      // list, so a save built on stale Tags would undo this one.
+      await onSaved();
+    } catch {
+      setSaveFailed(true);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <View>
+      <View style={styles.tags}>
+        {card.tags.map((tag) => (
+          <Chip
+            key={tag}
+            label={`${tag} ×`}
+            accessibilityLabel={t.removeTag(tag)}
+            disabled={saving}
+            onPress={() => save(card.tags.filter((other) => other !== tag))}
+          />
+        ))}
+        <Chip label={t.closeTags} disabled={saving} onPress={onClose} />
+      </View>
+      <TextInput
+        style={styles.input}
+        value={newTag}
+        onChangeText={setNewTag}
+        onSubmitEditing={() => {
+          if (newTag.trim() !== "") void save([...card.tags, newTag]);
+        }}
+        placeholder={t.addTag}
+        accessibilityLabel={t.addTag}
+        editable={!saving}
+        returnKeyType="done"
+      />
+      {saveFailed && <Text style={styles.problem}>{t.tagsSaveFailed}</Text>}
+    </View>
+  );
+}
+
+function Chip({
+  label,
+  accessibilityLabel,
+  selected,
+  disabled,
+  onPress,
+}: {
+  label: string;
+  accessibilityLabel?: string;
+  selected?: boolean;
+  disabled?: boolean;
+  onPress?: () => void;
+}) {
+  return (
+    <Pressable
+      accessibilityRole={onPress ? "button" : "text"}
+      accessibilityLabel={accessibilityLabel}
+      accessibilityState={{ selected: selected === true }}
+      onPress={onPress}
+      disabled={disabled || !onPress}
+      style={[styles.chip, selected && styles.chipSelected]}
+    >
+      <Text style={[styles.chipLabel, selected && styles.chipLabelSelected]}>
+        {label}
+      </Text>
+    </Pressable>
   );
 }
 
@@ -338,6 +499,20 @@ const styles = StyleSheet.create({
   cue: { fontSize: 17, fontWeight: "600", marginBottom: 4 },
   essence: { fontSize: 15, color: "#333" },
   due: { fontSize: 13, color: "#555", marginTop: 4 },
+  tagFilter: { flexGrow: 0, marginTop: 8 },
+  tags: { flexDirection: "row", flexWrap: "wrap", marginTop: 8 },
+  chip: {
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 16,
+    paddingVertical: 6,
+    paddingHorizontal: 12,
+    marginRight: 8,
+    marginBottom: 4,
+  },
+  chipSelected: { backgroundColor: "#222", borderColor: "#222" },
+  chipLabel: { fontSize: 13, color: "#222" },
+  chipLabelSelected: { color: "#fff" },
   progress: { fontSize: 14, color: "#555", marginVertical: 16 },
   reviewCue: { fontSize: 24, fontWeight: "700", textAlign: "center" },
   reviewEssence: {

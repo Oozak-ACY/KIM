@@ -1,12 +1,13 @@
 import type { Card, CardStore, Review, Schedule } from "@kim/core";
 import { supabase } from "./supabase";
 
-const CARD_COLUMNS = "id, cue, essence, created_at, due_at, fsrs_schedule";
+const CARD_COLUMNS = "id, cue, essence, tags, created_at, due_at, fsrs_schedule";
 
 type CardRow = {
   id: string;
   cue: string;
   essence: string;
+  tags: string[];
   created_at: string;
   due_at: string;
   fsrs_schedule: Schedule;
@@ -25,6 +26,7 @@ function toCard(row: CardRow): Card {
     id: row.id,
     cue: row.cue,
     essence: row.essence,
+    tags: row.tags,
     createdAt: new Date(row.created_at),
     dueAt: new Date(row.due_at),
     schedule: row.fsrs_schedule,
@@ -48,6 +50,7 @@ export const supabaseCardStore: CardStore = {
       .insert({
         cue: card.cue,
         essence: card.essence,
+        tags: card.tags,
         created_at: card.createdAt.toISOString(),
         due_at: card.dueAt.toISOString(),
         fsrs_schedule: card.schedule,
@@ -65,6 +68,17 @@ export const supabaseCardStore: CardStore = {
       .order("created_at", { ascending: false });
     if (error) throw error;
     return data.map(toCard);
+  },
+
+  async setTags(cardId, tags) {
+    const { data, error } = await supabase
+      .from("cards")
+      .update({ tags })
+      .eq("id", cardId)
+      .select(CARD_COLUMNS)
+      .single();
+    if (error) throw error;
+    return toCard(data);
   },
 
   async recordReview(card, review) {
