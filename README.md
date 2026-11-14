@@ -31,6 +31,8 @@ Every Account starts anonymous and becomes linked when the user signs in with Go
 - add `kim://**` to the redirect URLs;
 - set up the Google provider (a web client ID and secret).
 
+Do not run `supabase config push` against a hosted project from this folder: it pushes the local development settings, such as email confirmations off. Change hosted Auth settings in the dashboard.
+
 Locally, email links land in Mailpit at http://127.0.0.1:54324. Google stays off in `supabase/config.toml` until you set its credentials. OAuth redirects to `kim://` need a development build (`npx expo run:ios` or `npx expo run:android`), not Expo Go.
 
 ## Check
