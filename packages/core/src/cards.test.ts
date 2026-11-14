@@ -587,3 +587,309 @@ describe("room left in the Essence", () => {
     });
   });
 });
+
+async function validCard(
+  core: ReturnType<typeof setup>["core"],
+  input: { cue?: string; essence?: string; hints?: string } = {},
+) {
+  const result = await core.createCard({
+    cue: "A Cue",
+    essence: "An Essence.",
+    ...input,
+  });
+  if (!result.ok) throw new Error("the Card should be valid");
+  return result.card;
+}
+
+describe("Hints", () => {
+  it("starts a Card without Hints", async () => {
+    const { core } = setup();
+
+    const card = await validCard(core);
+
+    expect(card.hints).toBe("");
+  });
+
+  it("keeps the Hints given with a new Card", async () => {
+    const { core } = setup();
+
+    await validCard(core, { hints: "Think of the Sun." });
+
+    expect((await core.listCards())[0]?.hints).toBe("Think of the Sun.");
+  });
+
+  it("accepts Hints of 280 characters", async () => {
+    const { core } = setup();
+
+    const result = await core.createCard({
+      cue: "A Cue",
+      essence: "An Essence.",
+      hints: "h".repeat(280),
+    });
+
+    expect(result.ok).toBe(true);
+  });
+
+  it("refuses Hints above 280 characters", async () => {
+    const { core } = setup();
+
+    const result = await core.createCard({
+      cue: "A Cue",
+      essence: "An Essence.",
+      hints: "h".repeat(281),
+    });
+
+    expect(result).toEqual({ ok: false, problems: ["hints-too-long"] });
+  });
+
+  it("finds a Card by a word of its Hints", async () => {
+    const { core } = setup();
+    await validCard(core, { cue: "Fusion", hints: "Think of the Sun." });
+    await validCard(core, { cue: "Gravity" });
+
+    const found = await core.searchCards({ text: "sun" });
+
+    expect(found.map((card) => card.cue)).toEqual(["Fusion"]);
+  });
+});
+
+describe("editing a Card", () => {
+  it("changes the Cue, Essence and Hints", async () => {
+    const { core } = setup();
+    const card = await validCard(core);
+
+    await core.editCard(card.id, {
+      cue: "A new Cue",
+      essence: "A new Essence.",
+      hints: "A new Hint.",
+    });
+
+    expect(await core.listCards()).toMatchObject([
+      { cue: "A new Cue", essence: "A new Essence.", hints: "A new Hint." },
+    ]);
+  });
+
+  it("keeps the schedule and the next due date", async () => {
+    const { core, setNow } = setup();
+    const card = await validCard(core);
+    const reviewed = await core.recordReview({
+      card,
+      mode: "recall",
+      outcome: "remembered",
+      channel: "app",
+    });
+    setNow("2026-01-16T12:00:00.000Z");
+
+    const result = await core.editCard(card.id, {
+      cue: "A new Cue",
+      essence: "A new Essence.",
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      card: { dueAt: reviewed.dueAt, schedule: reviewed.schedule },
+    });
+    const [listed] = await core.listCards();
+    expect(listed?.dueAt).toEqual(reviewed.dueAt);
+    expect(listed?.schedule).toEqual(reviewed.schedule);
+  });
+
+  it("keeps the Tags and the Review history", async () => {
+    const { core } = setup();
+    const card = await validCard(core);
+    await core.setTags(card.id, ["physics"]);
+    await core.recordReview({
+      card,
+      mode: "recall",
+      outcome: "remembered",
+      channel: "app",
+    });
+
+    await core.editCard(card.id, { cue: "A new Cue", essence: "An Essence." });
+
+    expect((await core.listCards())[0]?.tags).toEqual(["physics"]);
+    expect(await core.listReviews(card.id)).toHaveLength(1);
+  });
+
+  it("removes the Hints when they are left out", async () => {
+    const { core } = setup();
+    const card = await validCard(core, { hints: "A Hint." });
+
+    await core.editCard(card.id, { cue: "A Cue", essence: "An Essence." });
+
+    expect((await core.listCards())[0]?.hints).toBe("");
+  });
+
+  it("refuses an edit past the limits and keeps the Card as it was", async () => {
+    const { core } = setup();
+    const card = await validCard(core);
+
+    const result = await core.editCard(card.id, {
+      cue: "",
+      essence: "e".repeat(281),
+      hints: "h".repeat(281),
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      problems: ["cue-missing", "essence-too-long", "hints-too-long"],
+    });
+    expect((await core.listCards())[0]).toEqual(card);
+  });
+});
+
+describe("restarting learning", () => {
+  it("makes the Card due now", async () => {
+    const { core, setNow } = setup();
+    let card = await validCard(core);
+    for (let review = 0; review < 3; review++) {
+      setNow(card.dueAt.toISOString());
+      card = await core.recordReview({
+        card,
+        mode: "recall",
+        outcome: "remembered",
+        channel: "app",
+      });
+    }
+    setNow("2026-03-01T08:00:00.000Z");
+
+    const restarted = await core.restartLearning(card.id);
+
+    expect(restarted.dueAt).toEqual(new Date("2026-03-01T08:00:00.000Z"));
+    expect((await core.dueCards()).map(({ id }) => id)).toContain(card.id);
+  });
+
+  it("brings the Card back as soon as a new Card once remembered again", async () => {
+    const { core, setNow } = setup();
+    let card = await validCard(core);
+    for (let review = 0; review < 3; review++) {
+      setNow(card.dueAt.toISOString());
+      card = await core.recordReview({
+        card,
+        mode: "recall",
+        outcome: "remembered",
+        channel: "app",
+      });
+    }
+    setNow("2026-03-01T08:00:00.000Z");
+    const fresh = await validCard(core);
+    const restarted = await core.restartLearning(card.id);
+
+    const [again, firstTime] = [
+      await core.recordReview({
+        card: restarted,
+        mode: "recall",
+        outcome: "remembered",
+        channel: "app",
+      }),
+      await core.recordReview({
+        card: fresh,
+        mode: "recall",
+        outcome: "remembered",
+        channel: "app",
+      }),
+    ];
+
+    expect(again.dueAt).toEqual(firstTime.dueAt);
+  });
+
+  it("keeps what the Card says and its Review history", async () => {
+    const { core } = setup();
+    const card = await validCard(core, { hints: "A Hint." });
+    await core.setTags(card.id, ["physics"]);
+    await core.recordReview({
+      card,
+      mode: "recall",
+      outcome: "remembered",
+      channel: "app",
+    });
+
+    const restarted = await core.restartLearning(card.id);
+
+    expect(restarted).toMatchObject({
+      cue: "A Cue",
+      essence: "An Essence.",
+      hints: "A Hint.",
+      tags: ["physics"],
+    });
+    expect(await core.listReviews(card.id)).toHaveLength(1);
+  });
+});
+
+describe("archiving a Card", () => {
+  it("starts a Card unarchived", async () => {
+    const { core } = setup();
+
+    const card = await validCard(core);
+
+    expect(card.archived).toBe(false);
+  });
+
+  it("is never due once Archived", async () => {
+    const { core, setNow } = setup();
+    const card = await validCard(core);
+
+    await core.archiveCard(card.id);
+
+    expect(await core.dueCards()).toEqual([]);
+    setNow("2027-01-15T09:00:00.000Z");
+    expect(await core.dueCards()).toEqual([]);
+  });
+
+  it("stays in the list and in search once Archived", async () => {
+    const { core } = setup();
+    const card = await validCard(core, { cue: "Fusion" });
+
+    await core.archiveCard(card.id);
+
+    expect(await core.listCards()).toMatchObject([{ id: card.id, archived: true }]);
+    expect((await core.searchCards({ text: "fusion" })).map(({ id }) => id)).toEqual([
+      card.id,
+    ]);
+  });
+
+  it("comes back into scheduling once unarchived", async () => {
+    const { core, setNow } = setup();
+    const card = await validCard(core);
+    const reviewed = await core.recordReview({
+      card,
+      mode: "recall",
+      outcome: "remembered",
+      channel: "app",
+    });
+    await core.archiveCard(card.id);
+
+    const unarchived = await core.unarchiveCard(card.id);
+
+    expect(unarchived).toMatchObject({
+      archived: false,
+      dueAt: reviewed.dueAt,
+      schedule: reviewed.schedule,
+    });
+    expect(await core.dueCards()).toEqual([]);
+    setNow(reviewed.dueAt.toISOString());
+    expect((await core.dueCards()).map(({ id }) => id)).toEqual([card.id]);
+  });
+});
+
+describe("deleting a Card", () => {
+  it("removes the Card and its Review history, and nothing else", async () => {
+    const { core } = setup();
+    const card = await validCard(core, { cue: "Doomed" });
+    const kept = await validCard(core, { cue: "Kept" });
+    for (const reviewed of [card, kept]) {
+      await core.recordReview({
+        card: reviewed,
+        mode: "recall",
+        outcome: "remembered",
+        channel: "app",
+      });
+    }
+
+    await core.deleteCard(card.id);
+
+    expect((await core.listCards()).map(({ cue }) => cue)).toEqual(["Kept"]);
+    expect(await core.listReviews(card.id)).toEqual([]);
+    expect(await core.listReviews(kept.id)).toHaveLength(1);
+  });
+});

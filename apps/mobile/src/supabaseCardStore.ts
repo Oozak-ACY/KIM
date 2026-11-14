@@ -1,13 +1,16 @@
-import type { Card, CardStore, Review, Schedule } from "@kim/core";
+import type { Card, CardChanges, CardStore, Review, Schedule } from "@kim/core";
 import { supabase } from "./supabase";
 
-const CARD_COLUMNS = "id, cue, essence, tags, created_at, due_at, fsrs_schedule";
+const CARD_COLUMNS =
+  "id, cue, essence, hints, tags, archived, created_at, due_at, fsrs_schedule";
 
 type CardRow = {
   id: string;
   cue: string;
   essence: string;
+  hints: string;
   tags: string[];
+  archived: boolean;
   created_at: string;
   due_at: string;
   fsrs_schedule: Schedule;
@@ -26,10 +29,21 @@ function toCard(row: CardRow): Card {
     id: row.id,
     cue: row.cue,
     essence: row.essence,
+    hints: row.hints,
     tags: row.tags,
+    archived: row.archived,
     createdAt: new Date(row.created_at),
     dueAt: new Date(row.due_at),
     schedule: row.fsrs_schedule,
+  };
+}
+
+function toRow(changes: CardChanges): Partial<CardRow> {
+  const { dueAt, schedule, ...same } = changes;
+  return {
+    ...same,
+    ...(dueAt && { due_at: dueAt.toISOString() }),
+    ...(schedule && { fsrs_schedule: schedule }),
   };
 }
 
@@ -44,17 +58,10 @@ function toReview(row: ReviewRow): Review {
 }
 
 export const supabaseCardStore: CardStore = {
-  async add(card) {
+  async add({ createdAt, ...card }) {
     const { data, error } = await supabase
       .from("cards")
-      .insert({
-        cue: card.cue,
-        essence: card.essence,
-        tags: card.tags,
-        created_at: card.createdAt.toISOString(),
-        due_at: card.dueAt.toISOString(),
-        fsrs_schedule: card.schedule,
-      })
+      .insert({ ...toRow(card), created_at: createdAt.toISOString() })
       .select(CARD_COLUMNS)
       .single();
     if (error) throw error;
@@ -70,10 +77,10 @@ export const supabaseCardStore: CardStore = {
     return data.map(toCard);
   },
 
-  async setTags(cardId, tags) {
+  async update(cardId, changes) {
     const { data, error } = await supabase
       .from("cards")
-      .update({ tags })
+      .update(toRow(changes))
       .eq("id", cardId)
       .select(CARD_COLUMNS)
       .single();
@@ -91,6 +98,11 @@ export const supabaseCardStore: CardStore = {
       review_channel: review.channel,
       review_mode: review.mode,
     });
+    if (error) throw error;
+  },
+
+  async remove(cardId) {
+    const { error } = await supabase.from("cards").delete().eq("id", cardId);
     if (error) throw error;
   },
 

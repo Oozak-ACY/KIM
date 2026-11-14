@@ -11,13 +11,20 @@ export type Card = {
   id: string;
   cue: string;
   essence: string;
+  /** An optional mnemonic, analogy or example; empty when there is none. */
+  hints: string;
   tags: string[];
+  /** Kept and searchable, but never due. */
+  archived: boolean;
   createdAt: Date;
   dueAt: Date;
   schedule: Schedule;
 };
 
 export type NewCard = Omit<Card, "id">;
+
+/** Fields of a Card a store changes in place; the others are left alone. */
+export type CardChanges = Partial<Omit<Card, "id" | "createdAt">>;
 
 export type ReviewChannel = "app";
 export type ReviewMode = "recall";
@@ -34,11 +41,16 @@ export type Review = {
 export type CardStore = {
   add(card: NewCard): Promise<Card>;
   list(): Promise<Card[]>;
-  /** Replaces the Card's Tags and leaves the rest of the Card alone. */
-  setTags(cardId: string, tags: string[]): Promise<Card>;
-  /** Saves the rescheduled Card and its Review together, or neither. */
+  /** Changes the given fields of the Card and returns it. */
+  update(cardId: string, changes: CardChanges): Promise<Card>;
+  /**
+   * Saves the Card's new due date and schedule with its Review, or neither.
+   * The rest of the Card is left alone, as it may have changed since.
+   */
   recordReview(card: Card, review: Review): Promise<void>;
   listReviews(cardId: string): Promise<Review[]>;
+  /** Deletes the Card and its Reviews for good. */
+  remove(cardId: string): Promise<void>;
 };
 
 export type Clock = {
@@ -89,20 +101,25 @@ export type AccountStore = {
 export const CUE_MAX_CHARACTERS = 100;
 export const ESSENCE_MAX_CHARACTERS = 280;
 export const ESSENCE_MAX_LINES = 3;
+export const HINTS_MAX_CHARACTERS = 280;
 
 const RECALL_GRADES: Record<RecallOutcome, Grade> = {
   remembered: "good",
   forgotten: "again",
 };
 
+/** What the user writes on a Card. */
+export type CardContent = { cue: string; essence: string; hints?: string };
+
 export type CardProblem =
   | "cue-missing"
   | "cue-too-long"
   | "essence-missing"
   | "essence-too-long"
-  | "essence-too-many-lines";
+  | "essence-too-many-lines"
+  | "hints-too-long";
 
-export type CreateCardResult =
+export type CardResult =
   | { ok: true; card: Card }
   | { ok: false; problems: CardProblem[] };
 
@@ -125,7 +142,7 @@ export function essenceRoom(essence: string): {
   };
 }
 
-function findProblems(input: { cue: string; essence: string }): CardProblem[] {
+function findProblems(input: Required<CardContent>): CardProblem[] {
   const problems: CardProblem[] = [];
   if (input.cue.trim() === "") problems.push("cue-missing");
   if (characterCount(input.cue) > CUE_MAX_CHARACTERS) {
@@ -135,7 +152,22 @@ function findProblems(input: { cue: string; essence: string }): CardProblem[] {
   const room = essenceRoom(input.essence);
   if (room.characters < 0) problems.push("essence-too-long");
   if (room.lines < 0) problems.push("essence-too-many-lines");
+  if (characterCount(input.hints) > HINTS_MAX_CHARACTERS) {
+    problems.push("hints-too-long");
+  }
   return problems;
+}
+
+/** The content as stored, with no Hints spelled out as empty. */
+function checkContent({
+  hints = "",
+  ...input
+}: CardContent):
+  | { ok: true; content: Required<CardContent> }
+  | { ok: false; problems: CardProblem[] } {
+  const content = { ...input, hints };
+  const problems = findProblems(content);
+  return problems.length > 0 ? { ok: false, problems } : { ok: true, content };
 }
 
 /** Ignores case and accents, so "energie" finds "Énergie". */
@@ -181,7 +213,7 @@ export function matchingCards(
     ) {
       return false;
     }
-    const searched = fold(`${card.cue}\n${card.essence}`);
+    const searched = fold(`${card.cue}\n${card.essence}\n${card.hints}`);
     return words.every((word) => searched.includes(word));
   });
 }
@@ -251,17 +283,15 @@ export function createCore({
       return accounts.deleteAccount();
     },
 
-    async createCard(input: {
-      cue: string;
-      essence: string;
-    }): Promise<CreateCardResult> {
-      const problems = findProblems(input);
-      if (problems.length > 0) return { ok: false, problems };
+    async createCard(input: CardContent): Promise<CardResult> {
+      const checked = checkContent(input);
+      if (!checked.ok) return checked;
 
       const now = clock.now();
       const card = await cards.add({
-        ...input,
+        ...checked.content,
         tags: [],
+        archived: false,
         createdAt: now,
         ...(await firstSchedule(now)),
       });
@@ -278,14 +308,44 @@ export function createCore({
 
     setTags(cardId: string, tags: string[]): Promise<Card> {
       const trimmed = tags.map((tag) => tag.trim()).filter((tag) => tag !== "");
-      return cards.setTags(cardId, uniqueTags(trimmed));
+      return cards.update(cardId, { tags: uniqueTags(trimmed) });
+    },
+
+    /** Changes what the Card says; its schedule and Reviews stay. */
+    async editCard(
+      cardId: string,
+      input: CardContent,
+    ): Promise<CardResult> {
+      const checked = checkContent(input);
+      if (!checked.ok) return checked;
+      const card = await cards.update(cardId, checked.content);
+      return { ok: true, card };
+    },
+
+    /** Forgets the Card's progress: it is scheduled again as a new Card. */
+    async restartLearning(cardId: string): Promise<Card> {
+      return cards.update(cardId, await firstSchedule(clock.now()));
+    },
+
+    archiveCard(cardId: string): Promise<Card> {
+      return cards.update(cardId, { archived: true });
+    },
+
+    /** The Card is due again on the date it had when it was Archived. */
+    unarchiveCard(cardId: string): Promise<Card> {
+      return cards.update(cardId, { archived: false });
+    },
+
+    /** For good: the Card and its Review history are gone. */
+    deleteCard(cardId: string): Promise<void> {
+      return cards.remove(cardId);
     },
 
     async dueCards(): Promise<Card[]> {
       const now = clock.now();
       const stored = await cards.list();
       return stored
-        .filter((card) => card.dueAt <= now)
+        .filter((card) => !card.archived && card.dueAt <= now)
         .sort((a, b) => a.dueAt.getTime() - b.dueAt.getTime());
     },
 

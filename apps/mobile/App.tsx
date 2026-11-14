@@ -61,6 +61,7 @@ function Cards() {
   const [loadFailed, setLoadFailed] = useState(false);
   const [emailLinkFailed, setEmailLinkFailed] = useState(false);
   const [creating, setCreating] = useState(false);
+  const [editing, setEditing] = useState<Card>();
   const [reviewing, setReviewing] = useState(false);
   const [managingAccount, setManagingAccount] = useState(false);
   const [searchText, setSearchText] = useState("");
@@ -131,12 +132,17 @@ function Cards() {
     );
   }
 
-  if (creating) {
+  if (creating || editing) {
+    const close = () => {
+      setCreating(false);
+      setEditing(undefined);
+    };
     return (
-      <NewCard
-        onCancel={() => setCreating(false)}
-        onCreated={() => {
-          setCreating(false);
+      <CardForm
+        card={editing}
+        onCancel={close}
+        onDone={() => {
+          close();
           void load();
         }}
       />
@@ -231,7 +237,12 @@ function Cards() {
           </Text>
         }
         renderItem={({ item }) => (
-          <CardRow card={item} due={dueIds.has(item.id)} onTagsSaved={load} />
+          <CardRow
+            card={item}
+            due={dueIds.has(item.id)}
+            onTagsSaved={load}
+            onEdit={() => setEditing(item)}
+          />
         )}
       />
       <Button label={t.newCard} onPress={() => setCreating(true)} />
@@ -243,10 +254,12 @@ function CardRow({
   card,
   due,
   onTagsSaved,
+  onEdit,
 }: {
   card: Card;
   due: boolean;
   onTagsSaved: () => Promise<void>;
+  onEdit: () => void;
 }) {
   const [editingTags, setEditingTags] = useState(false);
 
@@ -254,7 +267,10 @@ function CardRow({
     <View style={styles.card}>
       <Text style={styles.cue}>{card.cue}</Text>
       <Text style={styles.essence}>{card.essence}</Text>
-      <Text style={styles.due}>{due ? t.dueNow : t.nextDue(card.dueAt)}</Text>
+      {card.hints !== "" && <Text style={styles.hints}>{card.hints}</Text>}
+      <Text style={styles.due}>
+        {card.archived ? t.archived : due ? t.dueNow : t.nextDue(card.dueAt)}
+      </Text>
       {editingTags ? (
         <TagEditor
           card={card}
@@ -267,6 +283,7 @@ function CardRow({
             <Chip key={tag} label={tag} />
           ))}
           <Chip label={t.editTags} onPress={() => setEditingTags(true)} />
+          <Chip label={t.editCard} onPress={onEdit} />
         </View>
       )}
     </View>
@@ -522,7 +539,14 @@ function Reviews({ cards, onDone }: { cards: Card[]; onDone: () => void }) {
       </Text>
       <View style={styles.centered}>
         <Text style={styles.reviewCue}>{card.cue}</Text>
-        {revealed && <Text style={styles.reviewEssence}>{card.essence}</Text>}
+        {revealed && (
+          <>
+            <Text style={styles.reviewEssence}>{card.essence}</Text>
+            {card.hints !== "" && (
+              <Text style={styles.reviewHints}>{card.hints}</Text>
+            )}
+          </>
+        )}
       </View>
       {saveFailed && <Text style={styles.problem}>{t.reviewSaveFailed}</Text>}
       {revealed ? (
@@ -546,35 +570,60 @@ function Reviews({ cards, onDone }: { cards: Card[]; onDone: () => void }) {
   );
 }
 
-function NewCard({
+/** Creates a Card, or edits one and offers the rest of its care. */
+function CardForm({
+  card,
   onCancel,
-  onCreated,
+  onDone,
 }: {
+  card?: Card;
   onCancel: () => void;
-  onCreated: () => void;
+  onDone: () => void;
 }) {
-  const [cue, setCue] = useState("");
-  const [essence, setEssence] = useState("");
+  const [cue, setCue] = useState(card?.cue ?? "");
+  const [essence, setEssence] = useState(card?.essence ?? "");
+  const [hints, setHints] = useState(card?.hints ?? "");
   const [problems, setProblems] = useState<CardProblem[]>([]);
-  const [saveFailed, setSaveFailed] = useState(false);
+  const [failure, setFailure] = useState<string>();
   const [saving, setSaving] = useState(false);
   const room = essenceRoom(essence);
 
-  async function save() {
+  /** Runs a step and leaves the form once it says it is done. */
+  async function run(step: () => Promise<boolean>, failed: string) {
     setSaving(true);
-    setSaveFailed(false);
+    setFailure(undefined);
     try {
-      const result = await core.createCard({ cue, essence });
-      if (result.ok) {
-        onCreated();
-      } else {
-        setProblems(result.problems);
-      }
+      if (await step()) onDone();
     } catch {
-      setSaveFailed(true);
+      setFailure(failed);
     } finally {
       setSaving(false);
     }
+  }
+
+  const save = () =>
+    run(async () => {
+      const content = { cue, essence, hints };
+      const result = card
+        ? await core.editCard(card.id, content)
+        : await core.createCard(content);
+      if (!result.ok) setProblems(result.problems);
+      return result.ok;
+    }, t.saveFailed);
+
+  const act = (step: (cardId: string) => Promise<unknown>) => () => {
+    if (!card) return;
+    void run(async () => {
+      await step(card.id);
+      return true;
+    }, t.cardActionFailed);
+  };
+
+  function confirm(title: string, warning: string, onConfirm: () => void) {
+    Alert.alert(title, warning, [
+      { text: t.cancel, style: "cancel" },
+      { text: title, style: "destructive", onPress: onConfirm },
+    ]);
   }
 
   return (
@@ -582,7 +631,7 @@ function NewCard({
       contentContainerStyle={styles.form}
       keyboardShouldPersistTaps="handled"
     >
-      <Text style={styles.title}>{t.newCard}</Text>
+      <Text style={styles.title}>{card ? t.editCard : t.newCard}</Text>
       <Text style={styles.label}>{t.cueLabel}</Text>
       <TextInput
         style={styles.input}
@@ -614,15 +663,57 @@ function NewCard({
       >
         {t.charactersLeft(room.characters)} · {t.linesLeft(room.lines)}
       </Text>
+      <Text style={styles.label}>{t.hintsLabel}</Text>
+      <TextInput
+        style={styles.input}
+        value={hints}
+        onChangeText={(text) => {
+          setHints(text);
+          setProblems([]);
+        }}
+        placeholder={t.hintsPlaceholder}
+        accessibilityLabel={t.hintsLabel}
+        multiline
+      />
       {problems.map((problem) => (
         <Text key={problem} style={styles.problem}>
           {t.problems[problem]}
         </Text>
       ))}
-      {saveFailed && <Text style={styles.problem}>{t.saveFailed}</Text>}
+      {failure && <Text style={styles.problem}>{failure}</Text>}
       <View style={styles.fill} />
       <Button label={t.save} onPress={save} disabled={saving} />
-      <Button label={t.cancel} onPress={onCancel} quiet />
+      {card && (
+        <>
+          <Button
+            label={t.restartLearning}
+            onPress={() =>
+              confirm(
+                t.restartLearning,
+                t.restartLearningWarning,
+                act(core.restartLearning),
+              )
+            }
+            disabled={saving}
+            quiet
+          />
+          <Button
+            label={card.archived ? t.unarchive : t.archive}
+            onPress={act(card.archived ? core.unarchiveCard : core.archiveCard)}
+            disabled={saving}
+            quiet
+          />
+          <Button
+            label={t.deleteCard}
+            onPress={() =>
+              confirm(t.deleteCard, t.deleteCardWarning, act(core.deleteCard))
+            }
+            disabled={saving}
+            quiet
+          />
+        </>
+      )}
+      <Button label={t.cancel} onPress={onCancel} disabled={saving} quiet />
     </ScrollView>
   );
 }
@@ -671,6 +762,7 @@ const styles = StyleSheet.create({
   },
   cue: { fontSize: 17, fontWeight: "600", marginBottom: 4 },
   essence: { fontSize: 15, color: "#333" },
+  hints: { fontSize: 14, color: "#555", fontStyle: "italic", marginTop: 4 },
   due: { fontSize: 13, color: "#555", marginTop: 4 },
   tagFilter: { flexGrow: 0, marginTop: 8 },
   tags: { flexDirection: "row", flexWrap: "wrap", marginTop: 8 },
@@ -693,6 +785,13 @@ const styles = StyleSheet.create({
     color: "#333",
     textAlign: "center",
     marginTop: 16,
+  },
+  reviewHints: {
+    fontSize: 16,
+    color: "#555",
+    fontStyle: "italic",
+    textAlign: "center",
+    marginTop: 12,
   },
   label: { fontSize: 14, fontWeight: "600", marginTop: 12, marginBottom: 4 },
   input: {

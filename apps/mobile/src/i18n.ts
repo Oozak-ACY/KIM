@@ -1,5 +1,10 @@
 import type { CardProblem } from "@kim/core";
-import { CUE_MAX_CHARACTERS, ESSENCE_MAX_CHARACTERS, ESSENCE_MAX_LINES } from "@kim/core";
+import {
+  CUE_MAX_CHARACTERS,
+  ESSENCE_MAX_CHARACTERS,
+  ESSENCE_MAX_LINES,
+  HINTS_MAX_CHARACTERS,
+} from "@kim/core";
 import { getLocales } from "expo-localization";
 
 type Messages = {
@@ -17,6 +22,8 @@ type Messages = {
   cuePlaceholder: string;
   essenceLabel: string;
   essencePlaceholder: string;
+  hintsLabel: string;
+  hintsPlaceholder: string;
   charactersLeft: (count: number) => string;
   linesLeft: (count: number) => string;
   save: string;
@@ -24,6 +31,15 @@ type Messages = {
   loadFailed: string;
   saveFailed: string;
   retry: string;
+  editCard: string;
+  restartLearning: string;
+  restartLearningWarning: string;
+  archive: string;
+  unarchive: string;
+  archived: string;
+  deleteCard: string;
+  deleteCardWarning: string;
+  cardActionFailed: string;
   dueNow: string;
   nextDue: (date: Date) => string;
   reviewDueCards: (count: number) => string;
@@ -72,6 +88,8 @@ const en: Messages = {
   cuePlaceholder: "How does nuclear fusion work?",
   essenceLabel: "Essence",
   essencePlaceholder: `The key idea, in up to ${ESSENCE_MAX_LINES} lines`,
+  hintsLabel: "Hints (optional)",
+  hintsPlaceholder: "A mnemonic, an analogy or an example",
   charactersLeft: (count) =>
     count >= 0
       ? `${count} ${count === 1 ? "character" : "characters"} left`
@@ -85,6 +103,17 @@ const en: Messages = {
   loadFailed: "Your Cards could not be loaded. Check your connection.",
   saveFailed: "The Card could not be saved. Check your connection and try again.",
   retry: "Try again",
+  editCard: "Edit Card",
+  restartLearning: "Restart learning",
+  restartLearningWarning:
+    "This Card will be scheduled again as if it were new, starting now. Its past Reviews are kept.",
+  archive: "Archive",
+  unarchive: "Unarchive",
+  archived: "Archived",
+  deleteCard: "Delete Card",
+  deleteCardWarning:
+    "This permanently deletes the Card and its Review history. It cannot be undone.",
+  cardActionFailed: "That did not work. Check your connection and try again.",
   dueNow: "Due now",
   nextDue: (date) =>
     `Next due ${date.toLocaleString("en", DUE_DATE_FORMAT)}`,
@@ -102,6 +131,7 @@ const en: Messages = {
     "essence-missing": "Write an Essence.",
     "essence-too-long": `Keep the Essence to ${ESSENCE_MAX_CHARACTERS} characters.`,
     "essence-too-many-lines": `Keep the Essence to ${ESSENCE_MAX_LINES} lines.`,
+    "hints-too-long": `Keep the Hints to ${HINTS_MAX_CHARACTERS} characters.`,
   },
   account: "Account",
   signIn: "Sign in",
@@ -142,6 +172,8 @@ const fr: Messages = {
   cuePlaceholder: "Comment fonctionne la fusion nucléaire ?",
   essenceLabel: "Essentiel",
   essencePlaceholder: `L'idée clé, en ${ESSENCE_MAX_LINES} lignes maximum`,
+  hintsLabel: "Indices (facultatif)",
+  hintsPlaceholder: "Un moyen mnémotechnique, une analogie ou un exemple",
   charactersLeft: (count) =>
     count >= 0
       ? `${count} ${count <= 1 ? "caractère restant" : "caractères restants"}`
@@ -155,6 +187,17 @@ const fr: Messages = {
   loadFailed: "Impossible de charger vos Cartes. Vérifiez votre connexion.",
   saveFailed: "Impossible d'enregistrer la Carte. Vérifiez votre connexion et réessayez.",
   retry: "Réessayer",
+  editCard: "Modifier la Carte",
+  restartLearning: "Recommencer l'apprentissage",
+  restartLearningWarning:
+    "Cette Carte sera reprogrammée comme une nouvelle Carte, à partir de maintenant. Ses Révisions passées sont conservées.",
+  archive: "Archiver",
+  unarchive: "Désarchiver",
+  archived: "Archivée",
+  deleteCard: "Supprimer la Carte",
+  deleteCardWarning:
+    "La Carte et son historique de Révisions seront supprimés définitivement. C'est irréversible.",
+  cardActionFailed: "Cela n'a pas fonctionné. Vérifiez votre connexion et réessayez.",
   dueNow: "À revoir maintenant",
   nextDue: (date) =>
     `Prochaine échéance : ${date.toLocaleString("fr", DUE_DATE_FORMAT)}`,
@@ -172,6 +215,7 @@ const fr: Messages = {
     "essence-missing": "Écrivez un Essentiel.",
     "essence-too-long": `Limitez l'Essentiel à ${ESSENCE_MAX_CHARACTERS} caractères.`,
     "essence-too-many-lines": `Limitez l'Essentiel à ${ESSENCE_MAX_LINES} lignes.`,
+    "hints-too-long": `Limitez les Indices à ${HINTS_MAX_CHARACTERS} caractères.`,
   },
   account: "Compte",
   signIn: "Se connecter",

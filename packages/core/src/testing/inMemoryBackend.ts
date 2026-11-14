@@ -69,13 +69,13 @@ export function inMemoryBackend() {
       async list() {
         return cards.filter(({ userId }) => userId === user.id).map(strip<Card>);
       },
-      async setTags(cardId, tags) {
+      async update(cardId, changes) {
         const index = cards.findIndex(
           ({ id, userId }) => id === cardId && userId === user.id,
         );
         const card = cards[index];
         if (!card) throw new Error(`Card ${cardId} not found`);
-        cards[index] = { ...card, tags };
+        cards[index] = { ...card, ...changes };
         return strip<Card>(cards[index]);
       },
       async recordReview(card, review) {
@@ -83,8 +83,16 @@ export function inMemoryBackend() {
           ({ id, userId }) => id === card.id && userId === user.id,
         );
         if (index === -1) throw new Error(`Card ${card.id} not found`);
-        cards[index] = { ...card, userId: user.id };
+        const stored = cards[index] as Owned<Card>;
+        cards[index] = { ...stored, dueAt: card.dueAt, schedule: card.schedule };
         reviews.push({ ...review, userId: user.id });
+      },
+      async remove(cardId) {
+        const mine = ({ userId }: { userId: string }) => userId === user.id;
+        cards = cards.filter((card) => !(mine(card) && card.id === cardId));
+        reviews = reviews.filter(
+          (review) => !(mine(review) && review.cardId === cardId),
+        );
       },
       async listReviews(cardId) {
         return reviews
