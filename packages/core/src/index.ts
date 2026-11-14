@@ -45,6 +45,48 @@ export type Clock = {
   now(): Date;
 };
 
+/** A linked account has signed in with Apple, Google or email at least once. */
+export type Account = { id: string; linked: boolean };
+
+export type SignInMethod =
+  | { provider: "apple" }
+  | { provider: "google" }
+  | { provider: "email"; email: string };
+
+/**
+ * How a sign-in went. "email-sent" means it completes when the user opens
+ * the link we emailed them.
+ */
+export type SignInAttempt = "done" | "email-sent" | "cancelled";
+
+/** How a link went; "taken" means the identity already has another Account. */
+export type LinkAttempt = SignInAttempt | "taken";
+
+export type ConnectResult =
+  | { ok: true; status: "linked" | "signed-in" | "email-sent" | "cancelled" }
+  | { ok: false; problem: "email-invalid" };
+
+/** Just enough to catch a typo; the emailed link proves the address. */
+const EMAIL_SHAPE = /^[^\s@]+@[^\s@]+\.[^\s@]+$/;
+
+export type AccountStore = {
+  current(): Promise<Account>;
+  /** Adds the identity to the current account, which keeps all its data. */
+  link(method: SignInMethod): Promise<LinkAttempt>;
+  /** Switches this device to the account that owns the identity. */
+  signIn(method: SignInMethod): Promise<SignInAttempt>;
+  /**
+   * Finishes a link or sign-in from the link we emailed. False when the link
+   * is not one of ours or no longer valid.
+   */
+  completeEmailLink(link: string): Promise<boolean>;
+  /**
+   * Deletes the current account with all its Cards, Reviews and settings,
+   * then starts a fresh anonymous account.
+   */
+  deleteAccount(): Promise<void>;
+};
+
 export const CUE_MAX_CHARACTERS = 100;
 export const ESSENCE_MAX_CHARACTERS = 280;
 export const ESSENCE_MAX_LINES = 3;
@@ -151,8 +193,65 @@ export function tagsInUse(cards: Pick<Card, "tags">[]): string[] {
   );
 }
 
-export function createCore({ clock, cards }: { clock: Clock; cards: CardStore }) {
+export function createCore({
+  clock,
+  cards,
+  accounts,
+}: {
+  clock: Clock;
+  cards: CardStore;
+  accounts: AccountStore;
+}) {
+  /**
+   * Runs a step that may switch this device to another account. Cards made
+   * before signing in would be stranded on the anonymous account left
+   * behind, so they move to the new one, schedules included. A linked
+   * account's Cards stay where they are: that account is still reachable.
+   */
+  async function keepingAnonymousCards<T>(step: () => Promise<T>): Promise<T> {
+    const before = await accounts.current();
+    const stranded = before.linked ? [] : await cards.list();
+    const result = await step();
+    const after = await accounts.current();
+    if (after.id !== before.id) {
+      for (const { id: _, ...card } of stranded) await cards.add(card);
+    }
+    return result;
+  }
+
   return {
+    account(): Promise<Account> {
+      return accounts.current();
+    },
+
+    async connect(input: SignInMethod): Promise<ConnectResult> {
+      let method = input;
+      if (method.provider === "email") {
+        const email = method.email.trim();
+        if (!EMAIL_SHAPE.test(email)) return { ok: false, problem: "email-invalid" };
+        method = { provider: "email", email };
+      }
+
+      const linked = await accounts.link(method);
+      if (linked === "done") return { ok: true, status: "linked" };
+      if (linked !== "taken") return { ok: true, status: linked };
+
+      // The identity already has an account, from another device: join it.
+      const signedIn = await keepingAnonymousCards(() => accounts.signIn(method));
+      return {
+        ok: true,
+        status: signedIn === "done" ? "signed-in" : signedIn,
+      };
+    },
+
+    completeEmailLink(link: string): Promise<boolean> {
+      return keepingAnonymousCards(() => accounts.completeEmailLink(link));
+    },
+
+    deleteAccount(): Promise<void> {
+      return accounts.deleteAccount();
+    },
+
     async createCard(input: {
       cue: string;
       essence: string;

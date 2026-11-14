@@ -1,13 +1,11 @@
 import { describe, expect, it } from "vitest";
 import { createCore, essenceRoom, matchingCards, tagsInUse } from "./index";
-import { inMemoryCardStore } from "./testing/inMemoryCardStore";
+import { inMemoryBackend } from "./testing/inMemoryBackend";
 
 function setup(now = "2026-01-15T09:00:00.000Z") {
   let instant = new Date(now);
-  const core = createCore({
-    clock: { now: () => instant },
-    cards: inMemoryCardStore(),
-  });
+  const { cards, accounts } = inMemoryBackend().device("alice");
+  const core = createCore({ clock: { now: () => instant }, cards, accounts });
   return { core, setNow: (next: string) => (instant = new Date(next)) };
 }
 

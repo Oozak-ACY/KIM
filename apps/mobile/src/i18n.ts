@@ -34,6 +34,26 @@ type Messages = {
   stopReview: string;
   reviewSaveFailed: string;
   problems: Record<CardProblem, string>;
+  account: string;
+  signIn: string;
+  back: string;
+  accountPitch: string;
+  accountLinked: string;
+  continueWithApple: string;
+  continueWithGoogle: string;
+  emailLabel: string;
+  emailPlaceholder: string;
+  sendEmailLink: string;
+  emailSent: (email: string) => string;
+  emailInvalid: string;
+  emailLinkFailed: string;
+  linked: string;
+  signedIn: string;
+  signInFailed: string;
+  deleteAccount: string;
+  deleteAccountWarning: string;
+  accountDeleted: string;
+  deleteFailed: string;
 };
 
 const DUE_DATE_FORMAT = { dateStyle: "medium", timeStyle: "short" } as const;
@@ -84,6 +104,29 @@ const en: Messages = {
     "essence-too-long": `Keep the Essence to ${ESSENCE_MAX_CHARACTERS} characters.`,
     "essence-too-many-lines": `Keep the Essence to ${ESSENCE_MAX_LINES} lines.`,
   },
+  account: "Account",
+  signIn: "Sign in",
+  back: "Back",
+  accountPitch:
+    "Sign in to keep your Cards safe and see them on all your devices. The Cards you already have stay with you.",
+  accountLinked: "You are signed in. Your Cards are kept on all your devices.",
+  continueWithApple: "Continue with Apple",
+  continueWithGoogle: "Continue with Google",
+  emailLabel: "Email",
+  emailPlaceholder: "you@example.com",
+  sendEmailLink: "Email me a sign-in link",
+  emailSent: (email) =>
+    `We sent a link to ${email}. Open it on this device to finish signing in.`,
+  emailInvalid: "Enter a valid email address.",
+  emailLinkFailed: "This sign-in link did not work. It may have expired: ask for a new one.",
+  linked: "You are signed in, and your Cards are kept.",
+  signedIn: "You are signed in. Your Cards are here.",
+  signInFailed: "Signing in failed. Check your connection and try again.",
+  deleteAccount: "Delete my account",
+  deleteAccountWarning:
+    "This permanently deletes your account with all your Cards, Reviews and settings, on every device. It cannot be undone.",
+  accountDeleted: "Your account and all its data are deleted.",
+  deleteFailed: "The account could not be deleted. Check your connection and try again.",
 };
 
 const fr: Messages = {
@@ -132,6 +175,29 @@ const fr: Messages = {
     "essence-too-long": `Limitez l'Essentiel à ${ESSENCE_MAX_CHARACTERS} caractères.`,
     "essence-too-many-lines": `Limitez l'Essentiel à ${ESSENCE_MAX_LINES} lignes.`,
   },
+  account: "Compte",
+  signIn: "Se connecter",
+  back: "Retour",
+  accountPitch:
+    "Connectez-vous pour garder vos Cartes en sécurité et les retrouver sur tous vos appareils. Les Cartes que vous avez déjà restent avec vous.",
+  accountLinked: "Vous êtes connecté. Vos Cartes vous suivent sur tous vos appareils.",
+  continueWithApple: "Continuer avec Apple",
+  continueWithGoogle: "Continuer avec Google",
+  emailLabel: "E-mail",
+  emailPlaceholder: "vous@exemple.fr",
+  sendEmailLink: "Recevoir un lien de connexion",
+  emailSent: (email) =>
+    `Nous avons envoyé un lien à ${email}. Ouvrez-le sur cet appareil pour terminer la connexion.`,
+  emailInvalid: "Saisissez une adresse e-mail valide.",
+  emailLinkFailed: "Ce lien de connexion n'a pas fonctionné. Il a peut-être expiré : demandez-en un nouveau.",
+  linked: "Vous êtes connecté, et vos Cartes sont conservées.",
+  signedIn: "Vous êtes connecté. Vos Cartes sont là.",
+  signInFailed: "La connexion a échoué. Vérifiez votre connexion et réessayez.",
+  deleteAccount: "Supprimer mon compte",
+  deleteAccountWarning:
+    "Votre compte sera supprimé définitivement avec toutes vos Cartes, Révisions et réglages, sur tous vos appareils. C'est irréversible.",
+  accountDeleted: "Votre compte et toutes ses données sont supprimés.",
+  deleteFailed: "Impossible de supprimer le compte. Vérifiez votre connexion et réessayez.",
 };
 
 const messages: Record<string, Messages> = { en, fr };

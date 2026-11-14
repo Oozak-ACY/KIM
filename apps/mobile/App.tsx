@@ -1,6 +1,7 @@
-import { useCallback, useEffect, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 import {
   ActivityIndicator,
+  Alert,
   AppState,
   FlatList,
   KeyboardAvoidingView,
@@ -14,22 +15,28 @@ import {
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
+import * as AppleAuthentication from "expo-apple-authentication";
+import { useLinkingURL } from "expo-linking";
 import {
   createCore,
   essenceRoom,
   matchingCards,
   tagsInUse,
+  type Account,
   type Card,
   type CardProblem,
   type RecallOutcome,
+  type SignInMethod,
 } from "@kim/core";
 import { t } from "./src/i18n";
 import { ensureSession } from "./src/supabase";
+import { isEmailLink, supabaseAccountStore } from "./src/supabaseAccountStore";
 import { supabaseCardStore } from "./src/supabaseCardStore";
 
 const core = createCore({
   clock: { now: () => new Date() },
   cards: supabaseCardStore,
+  accounts: supabaseAccountStore,
 });
 
 export default function App() {
@@ -51,9 +58,12 @@ export default function App() {
 function Cards() {
   const [cards, setCards] = useState<Card[] | null>(null);
   const [dueCards, setDueCards] = useState<Card[]>([]);
+  const [account, setAccount] = useState<Account>();
   const [loadFailed, setLoadFailed] = useState(false);
+  const [emailLinkFailed, setEmailLinkFailed] = useState(false);
   const [creating, setCreating] = useState(false);
   const [reviewing, setReviewing] = useState(false);
+  const [managingAccount, setManagingAccount] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [selectedTag, setSelectedTag] = useState<string>();
 
@@ -61,12 +71,14 @@ function Cards() {
     setLoadFailed(false);
     try {
       await ensureSession();
-      const [listed, due] = await Promise.all([
+      const [listed, due, current] = await Promise.all([
         core.listCards(),
         core.dueCards(),
+        core.account(),
       ]);
       setCards(listed);
       setDueCards(due);
+      setAccount(current);
     } catch {
       setLoadFailed(true);
     }
@@ -75,6 +87,23 @@ function Cards() {
   useEffect(() => {
     void load();
   }, [load]);
+
+  // The link emailed to sign in opens the app. The hook repeats the launch
+  // link after a reload, and a link only works once.
+  const link = useLinkingURL();
+  const openedLinks = useRef(new Set<string>());
+  useEffect(() => {
+    if (!link || !isEmailLink(link) || openedLinks.current.has(link)) return;
+    openedLinks.current.add(link);
+    setEmailLinkFailed(false);
+    core
+      .completeEmailLink(link)
+      .then((completed) => {
+        setEmailLinkFailed(!completed);
+        if (completed) void load();
+      })
+      .catch(() => setEmailLinkFailed(true));
+  }, [link, load]);
 
   // Cards come due while the app sits in the background. Left alone during a
   // Review, whose list of Cards must not move under the user.
@@ -95,7 +124,7 @@ function Cards() {
     );
   }
 
-  if (cards === null) {
+  if (cards === null || account === undefined) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator />
@@ -111,6 +140,16 @@ function Cards() {
           setCreating(false);
           void load();
         }}
+      />
+    );
+  }
+
+  if (managingAccount) {
+    return (
+      <AccountSettings
+        account={account}
+        onChanged={load}
+        onClose={() => setManagingAccount(false)}
       />
     );
   }
@@ -134,7 +173,16 @@ function Cards() {
 
   return (
     <View style={styles.fill}>
-      <Text style={styles.title}>{t.cardsTitle}</Text>
+      <View style={styles.header}>
+        <Text style={styles.title}>{t.cardsTitle}</Text>
+        <Chip
+          label={account.linked ? t.account : t.signIn}
+          onPress={() => setManagingAccount(true)}
+        />
+      </View>
+      {emailLinkFailed && (
+        <Text style={styles.problem}>{t.emailLinkFailed}</Text>
+      )}
       {dueCards.length > 0 && (
         <Button
           label={t.reviewDueCards(dueCards.length)}
@@ -315,6 +363,155 @@ function Chip({
   );
 }
 
+function AccountSettings({
+  account,
+  onChanged,
+  onClose,
+}: {
+  account: Account;
+  onChanged: () => Promise<void>;
+  onClose: () => void;
+}) {
+  const [email, setEmail] = useState("");
+  const [busy, setBusy] = useState(false);
+  const [notice, setNotice] = useState<string>();
+  const [problem, setProblem] = useState<string>();
+  const [nativeApple, setNativeApple] = useState(false);
+
+  useEffect(() => {
+    AppleAuthentication.isAvailableAsync()
+      .then(setNativeApple)
+      .catch(() => setNativeApple(false));
+  }, []);
+
+  async function run(
+    step: () => Promise<{ notice?: string; problem?: string }>,
+    failure: string,
+  ) {
+    setBusy(true);
+    setNotice(undefined);
+    setProblem(undefined);
+    try {
+      const outcome = await step();
+      setNotice(outcome.notice);
+      setProblem(outcome.problem);
+    } catch {
+      setProblem(failure);
+    } finally {
+      setBusy(false);
+    }
+  }
+
+  const connect = (method: SignInMethod) =>
+    run(async () => {
+      const result = await core.connect(method);
+      if (!result.ok) return { problem: t.emailInvalid };
+      switch (result.status) {
+        case "email-sent":
+          return { notice: t.emailSent(email.trim()) };
+        case "linked":
+          await onChanged();
+          return { notice: t.linked };
+        case "signed-in":
+          await onChanged();
+          return { notice: t.signedIn };
+        case "cancelled":
+          return {};
+      }
+    }, t.signInFailed);
+
+  const deleteAccount = () =>
+    run(async () => {
+      await core.deleteAccount();
+      await onChanged();
+      return { notice: t.accountDeleted };
+    }, t.deleteFailed);
+
+  function confirmDelete() {
+    Alert.alert(t.deleteAccount, t.deleteAccountWarning, [
+      { text: t.cancel, style: "cancel" },
+      {
+        text: t.deleteAccount,
+        style: "destructive",
+        onPress: () => void deleteAccount(),
+      },
+    ]);
+  }
+
+  return (
+    <ScrollView
+      contentContainerStyle={styles.form}
+      keyboardShouldPersistTaps="handled"
+    >
+      <Text style={styles.title}>{t.account}</Text>
+      {account.linked ? (
+        <>
+          <Text style={styles.message}>{t.accountLinked}</Text>
+          <Button
+            label={t.deleteAccount}
+            onPress={confirmDelete}
+            disabled={busy}
+            quiet
+          />
+        </>
+      ) : (
+        <>
+          <Text style={styles.message}>{t.accountPitch}</Text>
+          {nativeApple ? (
+            <AppleAuthentication.AppleAuthenticationButton
+              buttonType={
+                AppleAuthentication.AppleAuthenticationButtonType.CONTINUE
+              }
+              buttonStyle={
+                AppleAuthentication.AppleAuthenticationButtonStyle.BLACK
+              }
+              cornerRadius={8}
+              style={styles.appleButton}
+              onPress={() => {
+                if (!busy) void connect({ provider: "apple" });
+              }}
+            />
+          ) : (
+            <Button
+              label={t.continueWithApple}
+              onPress={() => connect({ provider: "apple" })}
+              disabled={busy}
+            />
+          )}
+          <Button
+            label={t.continueWithGoogle}
+            onPress={() => connect({ provider: "google" })}
+            disabled={busy}
+          />
+          <Text style={styles.label}>{t.emailLabel}</Text>
+          <TextInput
+            style={styles.input}
+            value={email}
+            onChangeText={setEmail}
+            placeholder={t.emailPlaceholder}
+            accessibilityLabel={t.emailLabel}
+            autoCapitalize="none"
+            autoComplete="email"
+            autoCorrect={false}
+            keyboardType="email-address"
+            editable={!busy}
+          />
+          <Button
+            label={t.sendEmailLink}
+            onPress={() => connect({ provider: "email", email })}
+            disabled={busy}
+          />
+        </>
+      )}
+      {busy && <ActivityIndicator />}
+      {notice && <Text style={styles.message}>{notice}</Text>}
+      {problem && <Text style={styles.problem}>{problem}</Text>}
+      <View style={styles.fill} />
+      <Button label={t.back} onPress={onClose} disabled={busy} quiet />
+    </ScrollView>
+  );
+}
+
 function Reviews({ cards, onDone }: { cards: Card[]; onDone: () => void }) {
   const [position, setPosition] = useState(0);
   const [revealed, setRevealed] = useState(false);
@@ -490,6 +687,12 @@ const styles = StyleSheet.create({
   form: { flexGrow: 1 },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   title: { fontSize: 28, fontWeight: "700", marginVertical: 16 },
+  header: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+  },
+  appleButton: { height: 48, marginVertical: 8 },
   message: { fontSize: 16, color: "#555", textAlign: "center", margin: 16 },
   card: {
     paddingVertical: 12,

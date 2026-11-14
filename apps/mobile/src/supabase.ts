@@ -17,6 +17,8 @@ export const supabase = createClient(url, anonKey, {
     persistSession: true,
     autoRefreshToken: true,
     detectSessionInUrl: false,
+    // OAuth and email links come back with a code this device exchanges.
+    flowType: "pkce",
   },
 });
 

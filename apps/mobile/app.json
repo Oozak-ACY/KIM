@@ -2,12 +2,14 @@
   "expo": {
     "name": "KIM",
     "slug": "kim",
+    "scheme": "kim",
     "version": "1.0.0",
     "orientation": "portrait",
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true
+      "supportsTablet": true,
+      "usesAppleSignIn": true
     },
     "android": {
       "adaptiveIcon": {
@@ -22,7 +24,9 @@
       "favicon": "./assets/favicon.png"
     },
     "plugins": [
-      "expo-localization"
+      "expo-localization",
+      "expo-web-browser",
+      "expo-apple-authentication"
     ]
   }
 }
