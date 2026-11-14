@@ -25,7 +25,7 @@ describe("accounts", () => {
     expect(await core.account()).toMatchObject({ linked: false });
   });
 
-  it("links the anonymous account with Apple and keeps its Cards and their schedules", async () => {
+  it("links the anonymous account with Google and keeps its Cards and their schedules", async () => {
     const { device } = setup();
     const { core } = device("alice");
     const created = await core.createCard(CARD);
@@ -37,7 +37,7 @@ describe("accounts", () => {
       channel: "app",
     });
 
-    const result = await core.connect({ provider: "apple" });
+    const result = await core.connect({ provider: "google" });
 
     expect(result).toEqual({ ok: true, status: "linked" });
     expect(await core.account()).toMatchObject({ linked: true });
@@ -114,7 +114,7 @@ describe("accounts", () => {
     const carolPhone = device("carol");
     await carolPhone.core.connect({ provider: "google" });
     const shared = device("bob");
-    await shared.core.connect({ provider: "apple" });
+    await shared.core.connect({ provider: "google" });
     await shared.core.createCard(CARD);
     await carolPhone.core.connect({ provider: "email", email: "carol@example.com" });
     await carolPhone.core.completeEmailLink(carolPhone.lastEmailLink());
@@ -158,7 +158,7 @@ describe("accounts", () => {
       outcome: "forgotten",
       channel: "app",
     });
-    await phone.core.connect({ provider: "apple" });
+    await phone.core.connect({ provider: "google" });
     const before = await phone.core.account();
 
     await phone.core.deleteAccount();
@@ -169,7 +169,7 @@ describe("accounts", () => {
     expect(await phone.core.listCards()).toEqual([]);
     expect(await phone.core.listReviews(created.card.id)).toEqual([]);
     const tablet = device("alice");
-    await tablet.core.connect({ provider: "apple" });
+    await tablet.core.connect({ provider: "google" });
     expect(await tablet.core.listCards()).toEqual([]);
   });
 

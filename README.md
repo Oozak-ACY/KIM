@@ -25,13 +25,13 @@ A hosted Supabase project needs anonymous sign-ins turned on in its Auth setting
 
 ### Accounts
 
-Every Account starts anonymous and becomes linked when the user signs in with Apple, Google or an email magic link. In the hosted project's Auth settings:
+Every Account starts anonymous and becomes linked when the user signs in with Google or an email magic link. KIM does not offer Sign in with Apple. In the hosted project's Auth settings:
 
-- turn on manual linking, which lets an anonymous user link Apple or Google;
+- turn on manual linking, which lets an anonymous user link Google;
 - add `kim://**` to the redirect URLs;
-- set up the Apple provider (the iOS bundle ID as a client ID, for native sign-in, and a Services ID with its secret, for the browser sign-in on Android) and the Google provider (a web client ID and secret).
+- set up the Google provider (a web client ID and secret).
 
-Locally, email links land in Mailpit at http://127.0.0.1:54324. Apple and Google stay off in `supabase/config.toml` until you set their credentials. OAuth redirects to `kim://` need a development build (`npx expo run:ios` or `npx expo run:android`), not Expo Go.
+Locally, email links land in Mailpit at http://127.0.0.1:54324. Google stays off in `supabase/config.toml` until you set its credentials. OAuth redirects to `kim://` need a development build (`npx expo run:ios` or `npx expo run:android`), not Expo Go.
 
 ## Check
 

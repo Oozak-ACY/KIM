@@ -43,11 +43,11 @@ _Avoid_: Deck, folder, category
 ### Accounts
 
 **Account**:
-Who owns a set of Cards. Every user starts with an anonymous Account on their device, and becomes **linked** once they sign in with Apple, Google or an email link, which keeps their Cards and syncs them across devices.
+Who owns a set of Cards. Every user starts with an anonymous Account on their device, and becomes **linked** once they sign in with Google or an email link, which keeps their Cards and syncs them across devices.
 _Avoid_: Profile, user (for the Account itself)
 
 **Linked**:
-An Account that has signed in with Apple, Google or email at least once, as opposed to an anonymous one. Connecting an assistant and receiving Nudges require it.
+An Account that has signed in with Google or email at least once, as opposed to an anonymous one. Connecting an assistant and receiving Nudges require it.
 _Avoid_: Registered, signed up, verified
 
 ### Reviewing

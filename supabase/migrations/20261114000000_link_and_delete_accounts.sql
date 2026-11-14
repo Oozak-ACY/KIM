@@ -1,5 +1,5 @@
--- Whether the signed-in Account is linked: it has signed in with Apple,
--- Google or email. Anonymous Accounts are not linked. For policies and functions of
+-- Whether the signed-in Account is linked: it has signed in with Google
+-- or email. Anonymous Accounts are not linked. For policies and functions of
 -- features that require a linked account, such as connecting an assistant
 -- or receiving Nudges.
 create function public.user_is_linked()

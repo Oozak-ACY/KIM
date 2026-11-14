@@ -8,8 +8,7 @@
     "icon": "./assets/icon.png",
     "userInterfaceStyle": "light",
     "ios": {
-      "supportsTablet": true,
-      "usesAppleSignIn": true
+      "supportsTablet": true
     },
     "android": {
       "adaptiveIcon": {
@@ -25,8 +24,7 @@
     },
     "plugins": [
       "expo-localization",
-      "expo-web-browser",
-      "expo-apple-authentication"
+      "expo-web-browser"
     ]
   }
 }

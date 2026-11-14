@@ -15,7 +15,6 @@ import {
 } from "react-native";
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
-import * as AppleAuthentication from "expo-apple-authentication";
 import { useLinkingURL } from "expo-linking";
 import {
   createCore,
@@ -376,13 +375,6 @@ function AccountSettings({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
   const [problem, setProblem] = useState<string>();
-  const [nativeApple, setNativeApple] = useState(false);
-
-  useEffect(() => {
-    AppleAuthentication.isAvailableAsync()
-      .then(setNativeApple)
-      .catch(() => setNativeApple(false));
-  }, []);
 
   async function run(
     step: () => Promise<{ notice?: string; problem?: string }>,
@@ -457,27 +449,6 @@ function AccountSettings({
       ) : (
         <>
           <Text style={styles.message}>{t.accountPitch}</Text>
-          {nativeApple ? (
-            <AppleAuthentication.AppleAuthenticationButton
-              buttonType={
-                AppleAuthentication.AppleAuthenticationButtonType.CONTINUE
-              }
-              buttonStyle={
-                AppleAuthentication.AppleAuthenticationButtonStyle.BLACK
-              }
-              cornerRadius={8}
-              style={styles.appleButton}
-              onPress={() => {
-                if (!busy) void connect({ provider: "apple" });
-              }}
-            />
-          ) : (
-            <Button
-              label={t.continueWithApple}
-              onPress={() => connect({ provider: "apple" })}
-              disabled={busy}
-            />
-          )}
           <Button
             label={t.continueWithGoogle}
             onPress={() => connect({ provider: "google" })}
@@ -692,7 +663,6 @@ const styles = StyleSheet.create({
     alignItems: "center",
     justifyContent: "space-between",
   },
-  appleButton: { height: 48, marginVertical: 8 },
   message: { fontSize: 16, color: "#555", textAlign: "center", margin: 16 },
   card: {
     paddingVertical: 12,

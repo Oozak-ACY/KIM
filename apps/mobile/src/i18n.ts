@@ -39,7 +39,6 @@ type Messages = {
   back: string;
   accountPitch: string;
   accountLinked: string;
-  continueWithApple: string;
   continueWithGoogle: string;
   emailLabel: string;
   emailPlaceholder: string;
@@ -110,7 +109,6 @@ const en: Messages = {
   accountPitch:
     "Sign in to keep your Cards safe and see them on all your devices. The Cards you already have stay with you.",
   accountLinked: "You are signed in. Your Cards are kept on all your devices.",
-  continueWithApple: "Continue with Apple",
   continueWithGoogle: "Continue with Google",
   emailLabel: "Email",
   emailPlaceholder: "you@example.com",
@@ -181,7 +179,6 @@ const fr: Messages = {
   accountPitch:
     "Connectez-vous pour garder vos Cartes en sécurité et les retrouver sur tous vos appareils. Les Cartes que vous avez déjà restent avec vous.",
   accountLinked: "Vous êtes connecté. Vos Cartes vous suivent sur tous vos appareils.",
-  continueWithApple: "Continuer avec Apple",
   continueWithGoogle: "Continuer avec Google",
   emailLabel: "E-mail",
   emailPlaceholder: "vous@exemple.fr",

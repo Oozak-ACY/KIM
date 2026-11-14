@@ -11,7 +11,7 @@ type Owned<T> = T & { userId: string };
 
 /**
  * A stand-in for the KIM server shared by several devices. On a device,
- * Apple and Google answer as the person holding it, and email links are
+ * Google answers as the person holding it, and email links are
  * opened with `openEmailLink`.
  */
 export function inMemoryBackend() {

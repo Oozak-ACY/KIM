@@ -1,12 +1,9 @@
 import type { AccountStore, LinkAttempt, SignInMethod } from "@kim/core";
-import * as AppleAuthentication from "expo-apple-authentication";
-import * as Crypto from "expo-crypto";
 import * as Linking from "expo-linking";
 import * as WebBrowser from "expo-web-browser";
-import { Platform } from "react-native";
 import { ensureSession, supabase } from "./supabase";
 
-/** Where Apple and Google send the user back after the browser sign-in. */
+/** Where Google sends the user back after the browser sign-in. */
 const OAUTH_REDIRECT = Linking.createURL("auth/oauth");
 /** Where the emailed link opens the app. */
 const EMAIL_REDIRECT = Linking.createURL("auth/email");
@@ -15,11 +12,6 @@ const EMAIL_REDIRECT = Linking.createURL("auth/email");
 export function isEmailLink(link: string): boolean {
   return link.startsWith(EMAIL_REDIRECT);
 }
-
-type AppleToken = { token: string; nonce: string };
-
-/** iOS signs in with Apple natively; Android goes through the browser. */
-const NATIVE_APPLE = Platform.OS === "ios";
 
 /** Supabase puts the result in the query or the fragment, depending on the flow. */
 function authParams(url: string): URLSearchParams {
@@ -52,33 +44,6 @@ async function signInInBrowser(
   return exchangeCode(result.url);
 }
 
-/** Asks Apple who the user is; null when they cancel the sheet. */
-async function appleToken(): Promise<AppleToken | null> {
-  // Apple gets the hash of the nonce, Supabase the nonce itself.
-  const nonce = Crypto.randomUUID();
-  const hashedNonce = await Crypto.digestStringAsync(
-    Crypto.CryptoDigestAlgorithm.SHA256,
-    nonce,
-  );
-  try {
-    const credential = await AppleAuthentication.signInAsync({
-      requestedScopes: [AppleAuthentication.AppleAuthenticationScope.EMAIL],
-      nonce: hashedNonce,
-    });
-    if (!credential.identityToken) throw new Error("Apple sent no identity token");
-    return { token: credential.identityToken, nonce };
-  } catch (error) {
-    if ((error as { code?: string }).code === "ERR_REQUEST_CANCELED") return null;
-    throw error;
-  }
-}
-
-/**
- * The Apple token from a link refused because the Apple ID already has an
- * account, so signing in to that account does not show Apple's sheet twice.
- */
-let takenAppleToken: AppleToken | undefined;
-
 export const supabaseAccountStore: AccountStore = {
   async current() {
     await ensureSession();
@@ -90,7 +55,6 @@ export const supabaseAccountStore: AccountStore = {
   },
 
   async link(method: SignInMethod) {
-    takenAppleToken = undefined;
     if (method.provider === "email") {
       const { error } = await supabase.auth.updateUser(
         { email: method.email },
@@ -99,21 +63,6 @@ export const supabaseAccountStore: AccountStore = {
       if (error?.code === "email_exists") return "taken";
       if (error) throw error;
       return "email-sent";
-    }
-
-    if (method.provider === "apple" && NATIVE_APPLE) {
-      const apple = await appleToken();
-      if (!apple) return "cancelled";
-      const { error } = await supabase.auth.linkIdentity({
-        provider: "apple",
-        ...apple,
-      });
-      if (error?.code === "identity_already_exists") {
-        takenAppleToken = apple;
-        return "taken";
-      }
-      if (error) throw error;
-      return "done";
     }
 
     return signInInBrowser(
@@ -132,18 +81,6 @@ export const supabaseAccountStore: AccountStore = {
       });
       if (error) throw error;
       return "email-sent";
-    }
-
-    if (method.provider === "apple" && NATIVE_APPLE) {
-      const apple = takenAppleToken ?? (await appleToken());
-      takenAppleToken = undefined;
-      if (!apple) return "cancelled";
-      const { error } = await supabase.auth.signInWithIdToken({
-        provider: "apple",
-        ...apple,
-      });
-      if (error) throw error;
-      return "done";
     }
 
     const outcome = await signInInBrowser(

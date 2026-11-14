@@ -45,11 +45,10 @@ export type Clock = {
   now(): Date;
 };
 
-/** A linked account has signed in with Apple, Google or email at least once. */
+/** A linked Account has signed in with Google or email at least once. */
 export type Account = { id: string; linked: boolean };
 
 export type SignInMethod =
-  | { provider: "apple" }
   | { provider: "google" }
   | { provider: "email"; email: string };
 
