@@ -36,7 +36,7 @@ describe("accounts", () => {
     const { core } = device("alice");
     const created = await core.createCard(CARD);
     if (!created.ok) throw new Error("Card refused");
-    const reviewed = await core.recordReview({
+    const { archiveProposed: _, ...reviewed } = await core.recordReview({
       card: created.card,
       mode: "recall",
       outcome: "remembered",

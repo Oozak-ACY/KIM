@@ -50,3 +50,12 @@ export async function nextSchedule(
   });
   return toScheduled(reviewed);
 }
+
+const DAY_MS = 24 * 60 * 60 * 1000;
+
+/** Days between the Card's last Review and its due date; 0 before any Review. */
+export function scheduledIntervalDays({ dueAt, schedule }: ScheduledCard): number {
+  const { lastReviewAt } = schedule;
+  if (typeof lastReviewAt !== "string") return 0;
+  return (dueAt.getTime() - new Date(lastReviewAt).getTime()) / DAY_MS;
+}

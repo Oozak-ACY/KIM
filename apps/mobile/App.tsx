@@ -631,29 +631,78 @@ function Reviews({ cards, onDone }: { cards: Card[]; onDone: () => void }) {
   const [revealed, setRevealed] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
   const [saving, setSaving] = useState(false);
+  /** Shown right after a Review that earned the Card an archive proposal. */
+  const [proposingArchive, setProposingArchive] = useState(false);
   const card = cards[position];
 
   if (!card) return null;
 
   const style = reviewStyle(card);
 
-  const record = async (answer: ReviewAnswer) => {
+  const next = () => {
+    if (position + 1 === cards.length) {
+      onDone();
+    } else {
+      setPosition(position + 1);
+      setRevealed(false);
+    }
+  };
+
+  const save = async (step: () => Promise<void>) => {
     setSaving(true);
     setSaveFailed(false);
     try {
-      await core.recordReview({ card, channel: "app", ...answer });
-      if (position + 1 === cards.length) {
-        onDone();
-      } else {
-        setPosition(position + 1);
-        setRevealed(false);
-      }
+      await step();
     } catch {
       setSaveFailed(true);
     } finally {
       setSaving(false);
     }
   };
+
+  const record = (answer: ReviewAnswer) =>
+    save(async () => {
+      const reviewed = await core.recordReview({
+        card,
+        channel: "app",
+        ...answer,
+      });
+      if (reviewed.archiveProposed) setProposingArchive(true);
+      else next();
+    });
+
+  const decideArchive = (accept: boolean) =>
+    save(async () => {
+      await (accept
+        ? core.archiveCard(card.id)
+        : core.declineArchiveProposal(card.id));
+      setProposingArchive(false);
+      next();
+    });
+
+  if (proposingArchive) {
+    return (
+      <View style={styles.fill}>
+        <View style={styles.centered}>
+          <Text style={styles.reviewQuizCue}>{card.cue}</Text>
+          <Text style={styles.reviewCue}>{t.archiveProposal}</Text>
+        </View>
+        {saveFailed && (
+          <Text style={styles.problem}>{t.cardActionFailed}</Text>
+        )}
+        <Button
+          label={t.acceptArchiveProposal}
+          onPress={() => decideArchive(true)}
+          disabled={saving}
+        />
+        <Button
+          label={t.declineArchiveProposal}
+          onPress={() => decideArchive(false)}
+          disabled={saving}
+        />
+      </View>
+    );
+  }
 
   return (
     <View style={styles.fill}>

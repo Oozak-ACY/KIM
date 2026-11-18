@@ -50,6 +50,9 @@ type Messages = {
   forgotten: string;
   stopReview: string;
   reviewSaveFailed: string;
+  archiveProposal: string;
+  acceptArchiveProposal: string;
+  declineArchiveProposal: string;
   problems: Record<CardProblem, string>;
   quizMode: string;
   quizModeMarker: string;
@@ -144,6 +147,9 @@ const en: Messages = {
   forgotten: "I'd forgotten",
   stopReview: "Stop",
   reviewSaveFailed: "Your answer could not be saved. Check your connection and try again.",
+  archiveProposal: "I think you know this one by heart now. Archive it, or keep reviewing it?",
+  acceptArchiveProposal: "Archive it",
+  declineArchiveProposal: "Keep reviewing",
   problems: {
     "cue-missing": "Write a Cue.",
     "cue-too-long": `Keep the Cue to ${CUE_MAX_CHARACTERS} characters.`,
@@ -252,6 +258,9 @@ const fr: Messages = {
   forgotten: "J'avais oublié",
   stopReview: "Arrêter",
   reviewSaveFailed: "Impossible d'enregistrer votre réponse. Vérifiez votre connexion et réessayez.",
+  archiveProposal: "Je crois que vous la connaissez par cœur. L'archiver, ou continuer à la réviser ?",
+  acceptArchiveProposal: "L'archiver",
+  declineArchiveProposal: "Continuer à réviser",
   problems: {
     "cue-missing": "Écrivez un Repère.",
     "cue-too-long": `Limitez le Repère à ${CUE_MAX_CHARACTERS} caractères.`,

@@ -9,7 +9,7 @@ import type {
 import { supabase } from "./supabase";
 
 const CARD_COLUMNS =
-  "id, cue, essence, hints, quiz_questions, quiz_mode, quiz_turn, tags, archived, created_at, due_at, fsrs_schedule";
+  "id, cue, essence, hints, quiz_questions, quiz_mode, quiz_turn, tags, archived, archive_proposal_declined, created_at, due_at, fsrs_schedule";
 
 type CardRow = {
   id: string;
@@ -21,6 +21,7 @@ type CardRow = {
   quiz_turn: number;
   tags: string[];
   archived: boolean;
+  archive_proposal_declined: boolean;
   created_at: string;
   due_at: string;
   fsrs_schedule: Schedule;
@@ -45,6 +46,7 @@ function toCard(row: CardRow): Card {
     quizTurn: row.quiz_turn,
     tags: row.tags,
     archived: row.archived,
+    archiveProposalDeclined: row.archive_proposal_declined,
     createdAt: new Date(row.created_at),
     dueAt: new Date(row.due_at),
     schedule: row.fsrs_schedule,
@@ -52,8 +54,15 @@ function toCard(row: CardRow): Card {
 }
 
 function toRow(changes: CardChanges): Partial<CardRow> {
-  const { dueAt, schedule, quizQuestions, quizMode, quizTurn, ...same } =
-    changes;
+  const {
+    dueAt,
+    schedule,
+    quizQuestions,
+    quizMode,
+    quizTurn,
+    archiveProposalDeclined,
+    ...same
+  } = changes;
   return {
     ...same,
     ...(dueAt && { due_at: dueAt.toISOString() }),
@@ -61,6 +70,9 @@ function toRow(changes: CardChanges): Partial<CardRow> {
     ...(quizQuestions && { quiz_questions: quizQuestions }),
     ...(quizMode !== undefined && { quiz_mode: quizMode }),
     ...(quizTurn !== undefined && { quiz_turn: quizTurn }),
+    ...(archiveProposalDeclined !== undefined && {
+      archive_proposal_declined: archiveProposalDeclined,
+    }),
   };
 }
 

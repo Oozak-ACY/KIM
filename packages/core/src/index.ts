@@ -1,6 +1,7 @@
 import {
   firstSchedule,
   nextSchedule,
+  scheduledIntervalDays,
   type Grade,
   type Schedule,
 } from "./scheduling";
@@ -24,6 +25,8 @@ export type Card = {
   tags: string[];
   /** Kept and searchable, but never due. */
   archived: boolean;
+  /** The user kept reviewing it when KIM proposed archiving it: never proposed again. */
+  archiveProposalDeclined: boolean;
   createdAt: Date;
   dueAt: Date;
   schedule: Schedule;
@@ -52,6 +55,15 @@ export type QuizOutcome = "forgot" | "hard" | "good";
 export type ReviewAnswer =
   | { mode: "recall"; outcome: RecallOutcome }
   | { mode: "quiz"; outcome: QuizOutcome };
+
+/**
+ * A Card as a Review left it. KIM proposes archiving it when the user
+ * remembered it at the end of an interval of at least
+ * ARCHIVE_PROPOSAL_INTERVAL_DAYS.
+ */
+export type ReviewedCard = Card & { archiveProposed: boolean };
+
+export const ARCHIVE_PROPOSAL_INTERVAL_DAYS = 180;
 
 export type Review = {
   cardId: string;
@@ -424,6 +436,7 @@ export function createCore({
         quizTurn: 0,
         tags: [],
         archived: false,
+        archiveProposalDeclined: false,
         createdAt: now,
         ...(await firstSchedule(now)),
       });
@@ -475,6 +488,11 @@ export function createCore({
       return cards.update(cardId, { archived: false });
     },
 
+    /** The Card stays scheduled, and KIM never proposes archiving it again. */
+    declineArchiveProposal(cardId: string): Promise<Card> {
+      return cards.update(cardId, { archiveProposalDeclined: true });
+    },
+
     /** For good: the Card and its Review history are gone. */
     deleteCard(cardId: string): Promise<void> {
       return cards.remove(cardId);
@@ -492,9 +510,13 @@ export function createCore({
       card,
       channel,
       ...answer
-    }: { card: Card; channel: ReviewChannel } & ReviewAnswer): Promise<Card> {
+    }: { card: Card; channel: ReviewChannel } & ReviewAnswer): Promise<ReviewedCard> {
       const reviewedAt = clock.now();
       const grade = gradeOf(answer);
+      const archiveProposed =
+        grade !== "again" &&
+        !card.archiveProposalDeclined &&
+        scheduledIntervalDays(card) >= ARCHIVE_PROPOSAL_INTERVAL_DAYS;
       const reviewed = {
         ...card,
         ...(await nextSchedule(card, grade, reviewedAt)),
@@ -508,7 +530,7 @@ export function createCore({
         channel,
         mode: answer.mode,
       });
-      return reviewed;
+      return { ...reviewed, archiveProposed };
     },
 
     listReviews(cardId: string): Promise<Review[]> {
