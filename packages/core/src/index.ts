@@ -5,7 +5,11 @@ import {
   type Grade,
   type Schedule,
 } from "./scheduling";
-import type { NudgeLanguage } from "./nudges";
+import {
+  DEFAULT_NUDGE_SETTINGS,
+  type NudgeLanguage,
+  type NudgeSettings,
+} from "./nudges";
 
 export type { Grade, Schedule };
 export * from "./nudges";
@@ -90,12 +94,15 @@ export type CardStore = {
 };
 
 /** The user's choices, kept with their Account. */
-export type Settings = {
+export type Settings = NudgeSettings & {
   /** Whether a newly created Card starts in Quiz mode. */
   newCardsInQuizMode: boolean;
 };
 
-export const DEFAULT_SETTINGS: Settings = { newCardsInQuizMode: false };
+export const DEFAULT_SETTINGS: Settings = {
+  ...DEFAULT_NUDGE_SETTINGS,
+  newCardsInQuizMode: false,
+};
 
 export type SettingsStore = {
   /** The current Account's Settings, or the defaults if never changed. */
@@ -402,14 +409,19 @@ export function createCore({
 
     /**
      * Has this phone receive the Account's Nudges. Only a linked Account gets
-     * Nudges, so an anonymous one registers nothing and gets false.
+     * Nudges, so an anonymous one registers nothing and gets false. Nudges
+     * follow the phone's time zone until the user chooses one.
      */
     async registerForNudges(
       token: string,
       language: NudgeLanguage,
+      timeZone: string,
     ): Promise<boolean> {
       if (!(await accounts.current()).linked) return false;
       await pushTokens.register(token, language);
+      if ((await settings.get()).timeZone === null) {
+        await settings.update({ timeZone });
+      }
       return true;
     },
 

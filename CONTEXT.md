@@ -4,7 +4,7 @@ A mobile memory companion that resurfaces short pieces of knowledge, captured fr
 
 ## Language
 
-French UI terms: Card is **Carte**, Cue is **Repère**, Essence is **Essentiel**, Tag stays **Tag**. _Indice_ stays free for Hint.
+French UI terms: Card is **Carte**, Cue is **Repère**, Essence is **Essentiel**, Tag stays **Tag**, Nudge stays **Nudge**, Nudge window is **Plage de Nudges**. _Indice_ stays free for Hint.
 
 ### Cards
 
@@ -69,12 +69,20 @@ A Review run by the user's AI assistant inside a conversation through the KIM co
 _Avoid_: Remote review, AI review
 
 **Nudge**:
-The push notification that invites the user to a Review, phrased as a question about the Card's Cue.
+The push notification that invites the user to a Review, phrased as a question about the Card's Cue, or a Grouped Nudge.
 _Avoid_: Alert, reminder notification
 
 **Nudge window**:
-A user-chosen time range during which Nudges may be sent, subject to a daily cap.
+A user-chosen time range, in the user's time zone, during which Nudges may be sent, subject to the Daily cap. It may run across midnight.
 _Avoid_: Schedule, slot
+
+**Daily cap**:
+How many single-Card Nudges a user gets per local day, 3 by default.
+_Avoid_: Limit, quota
+
+**Grouped Nudge**:
+The one Nudge a day that gathers the due Cards past the Daily cap ("4 more things to reinforce"), opening the run of due Cards. A due Card not nudged waits for the next Nudge window.
+_Avoid_: Digest, summary
 
 ### Capture
 

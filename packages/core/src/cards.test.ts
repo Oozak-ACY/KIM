@@ -1183,7 +1183,7 @@ describe("the setting for new Cards to start in Quiz mode", () => {
   it("is off by default", async () => {
     const { core } = setup();
 
-    expect(await core.settings()).toEqual({ newCardsInQuizMode: false });
+    expect(await core.settings()).toMatchObject({ newCardsInQuizMode: false });
   });
 
   it("starts new Cards in Quiz mode once turned on", async () => {
@@ -1192,7 +1192,7 @@ describe("the setting for new Cards to start in Quiz mode", () => {
     await core.changeSettings({ newCardsInQuizMode: true });
     const result = await core.createCard(CARD);
 
-    expect(await core.settings()).toEqual({ newCardsInQuizMode: true });
+    expect(await core.settings()).toMatchObject({ newCardsInQuizMode: true });
     expect(result).toMatchObject({ ok: true, card: { quizMode: true } });
   });
 

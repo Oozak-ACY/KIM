@@ -11,11 +11,31 @@ export type NudgeLanguage = (typeof NUDGE_LANGUAGES)[number];
 export const NUDGE_CHANNEL_ID = "nudges";
 
 /**
- * How long a Card counts as newly due. One that came due earlier, before the
- * phone was registered or while the job was down, waits in the app instead
- * of arriving in a burst of Nudges.
+ * A Nudge window: a range of local time, in minutes after midnight, during
+ * which Nudges may be sent. One that ends before it starts runs across
+ * midnight.
  */
-export const NEWLY_DUE_MS = 24 * 60 * 60 * 1000;
+export type NudgeWindow = { start: number; end: number };
+
+/** The user's choices about Nudges. */
+export type NudgeSettings = {
+  nudgesOn: boolean;
+  nudgeWindows: NudgeWindow[];
+  /** How many single-Card Nudges may be sent per local day. */
+  dailyNudgeCap: number;
+  /** An IANA time zone; null until the app saves the phone's. */
+  timeZone: string | null;
+};
+
+/** The most single-Card Nudges a user may choose to get a day. */
+export const DAILY_NUDGE_CAP_MAX = 10;
+
+export const DEFAULT_NUDGE_SETTINGS: NudgeSettings = {
+  nudgesOn: true,
+  nudgeWindows: [{ start: 9 * 60, end: 21 * 60 }],
+  dailyNudgeCap: 3,
+  timeZone: null,
+};
 
 /** What planning needs to know of a Card. */
 export type NudgeCandidate = {
@@ -25,41 +45,122 @@ export type NudgeCandidate = {
   archived: boolean;
 };
 
-/** A Nudge already sent: a Card is nudged once per due date. */
-export type SentNudge = { cardId: string; dueAt: Date };
-
-/** A Nudge to send now, for the Card's current due date. */
-export type PlannedNudge = { cardId: string; cue: string; dueAt: Date };
+/** A Card as a Nudge is about it: for its due date at the time. */
+export type NudgedCard = { cardId: string; dueAt: Date };
 
 /**
- * The Nudges to send an Account now: one per newly due Card not yet nudged
- * for its current due date, longest due first. A Card reviewed since it came
- * due has a new due date in the future, so it drops out with no
- * cancellation. Anonymous Accounts get none.
+ * A Card nudged for a due date, alone or within a grouped Nudge: a Card is
+ * nudged once per due date.
+ */
+export type SentNudge = NudgedCard & { sentAt: Date; grouped: boolean };
+
+/**
+ * A Nudge to send now: about one Card for its current due date, or grouping
+ * the due Cards past the daily cap, which opens the run of due Cards.
+ */
+export type PlannedNudge =
+  | { kind: "card"; cardId: string; cue: string; dueAt: Date }
+  | { kind: "group"; cards: NudgedCard[] };
+
+/**
+ * The Nudges to send an Account now. Inside a Nudge window, each due Card
+ * not yet nudged for its current due date gets a Nudge of its own, longest
+ * due first, up to the daily cap; the rest are grouped into one Nudge, once
+ * a local day. Due Cards left out wait for the next window. A Card reviewed
+ * since it came due has a new due date in the future, so it drops out with
+ * no cancellation. Anonymous Accounts, and users who turned Nudges off, get
+ * none.
  */
 export function planNudges({
   linked,
+  settings,
   cards,
   sent,
   now,
 }: {
   linked: boolean;
+  settings: NudgeSettings;
   cards: NudgeCandidate[];
   sent: SentNudge[];
   now: Date;
 }): PlannedNudge[] {
-  if (!linked) return [];
+  if (!linked || !settings.nudgesOn) return [];
+  const local = localTime(now, settings.timeZone);
+  if (!settings.nudgeWindows.some((window) => inWindow(local.minute, window))) {
+    return [];
+  }
   const nudged = new Set(sent.map(nudgeKey));
-  const newlyDueFrom = now.getTime() - NEWLY_DUE_MS;
-  return cards
+  const due = cards
     .filter((card) => !card.archived && card.dueAt <= now)
-    .filter((card) => card.dueAt.getTime() >= newlyDueFrom)
     .filter((card) => !nudged.has(nudgeKey({ cardId: card.id, dueAt: card.dueAt })))
-    .sort((a, b) => a.dueAt.getTime() - b.dueAt.getTime())
-    .map(({ id, cue, dueAt }) => ({ cardId: id, cue, dueAt }));
+    .sort((a, b) => a.dueAt.getTime() - b.dueAt.getTime());
+
+  const sentToday = sent.filter(
+    ({ sentAt }) => localTime(sentAt, settings.timeZone).day === local.day,
+  );
+  const singlesLeft = Math.max(
+    0,
+    settings.dailyNudgeCap - sentToday.filter(({ grouped }) => !grouped).length,
+  );
+  const singles: PlannedNudge[] = due
+    .slice(0, singlesLeft)
+    .map(({ id, cue, dueAt }) => ({ kind: "card", cardId: id, cue, dueAt }));
+  const overflow = due.slice(singlesLeft);
+  if (overflow.length === 0 || sentToday.some(({ grouped }) => grouped)) {
+    return singles;
+  }
+  return [
+    ...singles,
+    {
+      kind: "group",
+      cards: overflow.map(({ id, dueAt }) => ({ cardId: id, dueAt })),
+    },
+  ];
 }
 
-function nudgeKey({ cardId, dueAt }: SentNudge): string {
+function inWindow(minute: number, { start, end }: NudgeWindow): boolean {
+  return start <= end
+    ? start <= minute && minute < end
+    : minute >= start || minute < end;
+}
+
+/** Whether the time zone is one KIM can plan Nudges in. */
+export function isTimeZone(timeZone: string): boolean {
+  try {
+    new Intl.DateTimeFormat("en-US", { timeZone });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * The local day and minute of the instant, in the time zone. An unknown or
+ * missing time zone counts as UTC, so one bad setting never stops the job.
+ */
+function localTime(
+  at: Date,
+  timeZone: string | null,
+): { day: string; minute: number } {
+  const zone = timeZone !== null && isTimeZone(timeZone) ? timeZone : "UTC";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hourCycle: "h23",
+  }).formatToParts(at);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value ?? "0";
+  return {
+    day: `${part("year")}-${part("month")}-${part("day")}`,
+    minute: Number(part("hour")) * 60 + Number(part("minute")),
+  };
+}
+
+function nudgeKey({ cardId, dueAt }: NudgedCard): string {
   return `${cardId}@${dueAt.getTime()}`;
 }
 
@@ -74,6 +175,20 @@ export function nudgeMessage(
   language: NudgeLanguage,
 ): { title: string; body: string } {
   return { title: cue, body: NUDGE_BODIES[language] };
+}
+
+const NUDGE_GROUP_BODIES: Record<NudgeLanguage, (count: number) => string> = {
+  en: (count) => `${count} more ${count === 1 ? "thing" : "things"} to reinforce`,
+  fr: (count) =>
+    count === 1 ? "1 autre chose à renforcer" : `${count} autres choses à renforcer`,
+};
+
+/** The grouped Nudge: how many more due Cards wait past the daily cap. */
+export function nudgeGroupMessage(
+  count: number,
+  language: NudgeLanguage,
+): { title: string; body: string } {
+  return { title: "KIM", body: NUDGE_GROUP_BODIES[language](count) };
 }
 
 /** The first of the device's languages, by preference, that KIM speaks. */

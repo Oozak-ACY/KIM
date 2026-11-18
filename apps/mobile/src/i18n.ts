@@ -70,6 +70,21 @@ type Messages = {
   newCardsInQuizMode: string;
   newCardsInQuizModeHelp: string;
   settingsSaveFailed: string;
+  nudgesOn: string;
+  nudgesOnHelp: string;
+  nudgeWindows: string;
+  nudgeWindowsHelp: string;
+  nudgeWindowStart: string;
+  nudgeWindowEnd: string;
+  addNudgeWindow: string;
+  removeNudgeWindow: string;
+  dailyNudgeCap: string;
+  dailyNudgeCapHelp: string;
+  timeZone: string;
+  timeZoneUnknown: string;
+  usePhoneTimeZone: (zone: string) => string;
+  lower: (what: string) => string;
+  raise: (what: string) => string;
   account: string;
   signIn: string;
   back: string;
@@ -91,6 +106,7 @@ type Messages = {
   deleteFailed: string;
   nudgeChannel: string;
   nudgeCardGone: string;
+  nudgeNothingDue: string;
 };
 
 const DUE_DATE_FORMAT = { dateStyle: "medium", timeStyle: "short" } as const;
@@ -180,6 +196,23 @@ const en: Messages = {
     "You can still switch each Card between Quiz mode and Recall mode.",
   settingsSaveFailed:
     "The setting could not be saved. Check your connection and try again.",
+  nudgesOn: "Nudges",
+  nudgesOnHelp: "KIM nudges you on this phone when a Card is due.",
+  nudgeWindows: "Nudge windows",
+  nudgeWindowsHelp:
+    "Nudges are only sent within these times. A window can run past midnight. Due Cards outside them wait for the next window.",
+  nudgeWindowStart: "From",
+  nudgeWindowEnd: "To",
+  addNudgeWindow: "Add a window",
+  removeNudgeWindow: "Remove",
+  dailyNudgeCap: "Nudges a day",
+  dailyNudgeCapHelp:
+    "Past this, the other due Cards are grouped into a single Nudge.",
+  timeZone: "Time zone",
+  timeZoneUnknown: "Unknown time zone, such as Europe/Paris.",
+  usePhoneTimeZone: (zone) => `Use this phone's (${zone})`,
+  lower: (what) => `Lower: ${what}`,
+  raise: (what) => `Raise: ${what}`,
   account: "Account",
   signIn: "Sign in",
   back: "Back",
@@ -204,6 +237,7 @@ const en: Messages = {
   deleteFailed: "The account could not be deleted. Check your connection and try again.",
   nudgeChannel: "Nudges",
   nudgeCardGone: "This Card is no longer due for now.",
+  nudgeNothingDue: "Nothing is due for now.",
 };
 
 const fr: Messages = {
@@ -291,6 +325,23 @@ const fr: Messages = {
     "Vous pouvez toujours passer chaque Carte du mode Quiz au mode Rappel.",
   settingsSaveFailed:
     "Impossible d'enregistrer le réglage. Vérifiez votre connexion et réessayez.",
+  nudgesOn: "Nudges",
+  nudgesOnHelp: "KIM vous envoie un Nudge sur ce téléphone quand une Carte est à réviser.",
+  nudgeWindows: "Plages de Nudges",
+  nudgeWindowsHelp:
+    "Les Nudges ne sont envoyés que pendant ces plages. Une plage peut passer minuit. Les Cartes à réviser en dehors attendent la plage suivante.",
+  nudgeWindowStart: "De",
+  nudgeWindowEnd: "À",
+  addNudgeWindow: "Ajouter une plage",
+  removeNudgeWindow: "Retirer",
+  dailyNudgeCap: "Nudges par jour",
+  dailyNudgeCapHelp:
+    "Au-delà, les autres Cartes à réviser sont regroupées en un seul Nudge.",
+  timeZone: "Fuseau horaire",
+  timeZoneUnknown: "Fuseau horaire inconnu, par exemple Europe/Paris.",
+  usePhoneTimeZone: (zone) => `Utiliser celui du téléphone (${zone})`,
+  lower: (what) => `Diminuer : ${what}`,
+  raise: (what) => `Augmenter : ${what}`,
   account: "Compte",
   signIn: "Se connecter",
   back: "Retour",
@@ -315,6 +366,7 @@ const fr: Messages = {
   deleteFailed: "Impossible de supprimer le compte. Vérifiez votre connexion et réessayez.",
   nudgeChannel: "Nudges",
   nudgeCardGone: "Cette Carte n'est plus à réviser pour l'instant.",
+  nudgeNothingDue: "Rien à réviser pour l'instant.",
 };
 
 const messages: Record<string, Messages> = { en, fr };

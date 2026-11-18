@@ -1,5 +1,5 @@
 import Constants from "expo-constants";
-import { getLocales } from "expo-localization";
+import { getCalendars, getLocales } from "expo-localization";
 import * as Notifications from "expo-notifications";
 import { Platform } from "react-native";
 import { NUDGE_CHANNEL_ID, nudgeLanguage, type NudgeLanguage } from "@kim/core";
@@ -19,6 +19,15 @@ Notifications.setNotificationHandler({
 export function phoneLanguage(): NudgeLanguage {
   return nudgeLanguage(
     getLocales().flatMap(({ languageCode }) => (languageCode ? [languageCode] : [])),
+  );
+}
+
+/** This phone's time zone, which Nudges follow until the user chooses one. */
+export function phoneTimeZone(): string {
+  return (
+    getCalendars()[0]?.timeZone ??
+    Intl.DateTimeFormat().resolvedOptions().timeZone ??
+    "UTC"
   );
 }
 
@@ -51,13 +60,20 @@ export async function phonePushToken(): Promise<string | undefined> {
   return data;
 }
 
-/** The Card a tapped Nudge is about, if the response is a tap on a Nudge. */
-export function nudgedCardId(
+/**
+ * What a tapped Nudge opens: one Card's Review, or for a grouped Nudge the
+ * run of due Cards. Undefined when the response is not a tap on a Nudge.
+ */
+export type NudgeTarget = { kind: "card"; cardId: string } | { kind: "due" };
+
+export function nudgeTarget(
   response: Notifications.NotificationResponse,
-): string | undefined {
+): NudgeTarget | undefined {
   if (response.actionIdentifier !== Notifications.DEFAULT_ACTION_IDENTIFIER) {
     return undefined;
   }
-  const { cardId } = response.notification.request.content.data ?? {};
-  return typeof cardId === "string" ? cardId : undefined;
+  const { cardId, due } = response.notification.request.content.data ?? {};
+  if (typeof cardId === "string") return { kind: "card", cardId };
+  if (due === true) return { kind: "due" };
+  return undefined;
 }

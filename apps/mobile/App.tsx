@@ -20,7 +20,9 @@ import { useLinkingURL } from "expo-linking";
 import * as Notifications from "expo-notifications";
 import {
   createCore,
+  DAILY_NUDGE_CAP_MAX,
   essenceRoom,
+  isTimeZone,
   matchingCards,
   reviewStyle,
   tagsInUse,
@@ -30,11 +32,17 @@ import {
   type CardProblem,
   type QuizQuestion,
   type ReviewAnswer,
+  type NudgeWindow,
   type Settings,
   type SignInMethod,
 } from "@kim/core";
 import { t } from "./src/i18n";
-import { nudgedCardId, phoneLanguage, phonePushToken } from "./src/nudges";
+import {
+  nudgeTarget,
+  phoneLanguage,
+  phonePushToken,
+  phoneTimeZone,
+} from "./src/nudges";
 import { ensureSession } from "./src/supabase";
 import { isEmailLink, supabaseAccountStore } from "./src/supabaseAccountStore";
 import { supabaseCardStore } from "./src/supabaseCardStore";
@@ -80,7 +88,8 @@ function Cards() {
   const [searchText, setSearchText] = useState("");
   const [selectedTag, setSelectedTag] = useState<string>();
   const [nudgedCard, setNudgedCard] = useState<Card>();
-  const [nudgedCardGone, setNudgedCardGone] = useState(false);
+  /** Why a tapped Nudge opened no Review. */
+  const [nudgeNotice, setNudgeNotice] = useState<string>();
 
   const load = useCallback(async () => {
     setLoadFailed(false);
@@ -130,30 +139,42 @@ function Cards() {
     registeredFor.current = account.id;
     (async () => {
       const token = await phonePushToken();
-      if (token) await core.registerForNudges(token, phoneLanguage());
+      if (token) {
+        await core.registerForNudges(token, phoneLanguage(), phoneTimeZone());
+        // The phone's time zone may have become the Nudges' one.
+        setSettings(await core.settings());
+      }
     })().catch(() => {
       registeredFor.current = undefined;
     });
   }, [account]);
 
   // Tapping a Nudge, even one that launched the app, opens that Card's
-  // Review, as long as the Card is still due.
+  // Review, as long as the Card is still due. A grouped Nudge opens the run
+  // of due Cards.
   const nudgeResponse = Notifications.useLastNotificationResponse();
   const openedNudges = useRef(new Set<string>());
   useEffect(() => {
     if (!nudgeResponse) return;
-    const cardId = nudgedCardId(nudgeResponse);
+    const target = nudgeTarget(nudgeResponse);
     const nudge = nudgeResponse.notification.request.identifier;
-    if (!cardId || openedNudges.current.has(nudge)) return;
+    if (!target || openedNudges.current.has(nudge)) return;
     openedNudges.current.add(nudge);
     Notifications.clearLastNotificationResponse();
-    setNudgedCardGone(false);
+    setNudgeNotice(undefined);
     (async () => {
       await ensureSession();
-      const card = (await core.dueCards()).find(({ id }) => id === cardId);
+      const due = await core.dueCards();
+      if (target.kind === "due") {
+        setDueCards(due);
+        if (due.length > 0) setReviewing(true);
+        else setNudgeNotice(t.nudgeNothingDue);
+        return;
+      }
+      const card = due.find(({ id }) => id === target.cardId);
       if (card) setNudgedCard(card);
-      else setNudgedCardGone(true);
-    })().catch(() => setNudgedCardGone(true));
+      else setNudgeNotice(t.nudgeCardGone);
+    })().catch(() => setNudgeNotice(t.loadFailed));
   }, [nudgeResponse]);
 
   // Cards come due while the app sits in the background. Left alone during a
@@ -266,8 +287,8 @@ function Cards() {
       {emailLinkFailed && (
         <Text style={styles.problem}>{t.emailLinkFailed}</Text>
       )}
-      {nudgedCardGone && (
-        <Text style={styles.message}>{t.nudgeCardGone}</Text>
+      {nudgeNotice !== undefined && (
+        <Text style={styles.message}>{nudgeNotice}</Text>
       )}
       {dueCards.length > 0 && (
         <Button
@@ -582,6 +603,33 @@ function AccountSettings({
   );
 }
 
+/** Nudge window times move by half an hour. */
+const WINDOW_STEP_MINUTES = 30;
+const MINUTES_A_DAY = 24 * 60;
+const NEW_NUDGE_WINDOW: NudgeWindow = { start: 12 * 60, end: 13 * 60 };
+
+function clockTime(minutes: number): string {
+  const hours = Math.floor(minutes / 60) % 24;
+  return `${String(hours).padStart(2, "0")}:${String(minutes % 60).padStart(2, "0")}`;
+}
+
+/**
+ * The window with one end moved by a step, around the clock. An end never
+ * lands on the other, which would leave the window empty.
+ */
+function movedWindow(
+  window: NudgeWindow,
+  end: "start" | "end",
+  direction: 1 | -1,
+): NudgeWindow {
+  const move = (minutes: number) =>
+    (minutes + direction * WINDOW_STEP_MINUTES + MINUTES_A_DAY) % MINUTES_A_DAY;
+  const other = (end === "start" ? window.end : window.start) % MINUTES_A_DAY;
+  let moved = move(window[end] % MINUTES_A_DAY);
+  if (moved === other) moved = move(moved);
+  return { ...window, [end]: moved };
+}
+
 function SettingsScreen({
   settings,
   onChanged,
@@ -593,6 +641,16 @@ function SettingsScreen({
 }) {
   const [saving, setSaving] = useState(false);
   const [saveFailed, setSaveFailed] = useState(false);
+  const phoneZone = phoneTimeZone();
+  const timeZone = settings.timeZone ?? phoneZone;
+  const [timeZoneText, setTimeZoneText] = useState(timeZone);
+  const [timeZoneUnknown, setTimeZoneUnknown] = useState(false);
+  // The time zone can be saved while the screen is open, such as the
+  // phone's when it registers for Nudges.
+  useEffect(() => {
+    setTimeZoneText(timeZone);
+    setTimeZoneUnknown(false);
+  }, [timeZone]);
 
   async function change(changes: Partial<Settings>) {
     setSaving(true);
@@ -606,8 +664,26 @@ function SettingsScreen({
     }
   }
 
+  function changeWindow(index: number, window: NudgeWindow | undefined) {
+    const windows = [...settings.nudgeWindows];
+    if (window) windows[index] = window;
+    else windows.splice(index, 1);
+    void change({ nudgeWindows: windows });
+  }
+
+  function chooseTimeZone(zone: string) {
+    const chosen = zone.trim();
+    setTimeZoneText(chosen);
+    const known = isTimeZone(chosen);
+    setTimeZoneUnknown(!known);
+    if (known && chosen !== timeZone) void change({ timeZone: chosen });
+  }
+
   return (
-    <ScrollView contentContainerStyle={styles.form}>
+    <ScrollView
+      contentContainerStyle={styles.form}
+      keyboardShouldPersistTaps="handled"
+    >
       <Text style={styles.title}>{t.settings}</Text>
       <View style={styles.switchRow}>
         <Text style={styles.switchLabel}>{t.newCardsInQuizMode}</Text>
@@ -619,10 +695,140 @@ function SettingsScreen({
         />
       </View>
       <Text style={styles.room}>{t.newCardsInQuizModeHelp}</Text>
+
+      <View style={styles.switchRow}>
+        <Text style={styles.switchLabel}>{t.nudgesOn}</Text>
+        <Switch
+          value={settings.nudgesOn}
+          onValueChange={(on) => change({ nudgesOn: on })}
+          disabled={saving}
+          accessibilityLabel={t.nudgesOn}
+        />
+      </View>
+      <Text style={styles.room}>{t.nudgesOnHelp}</Text>
+
+      {settings.nudgesOn && (
+        <>
+          <Text style={styles.label}>{t.nudgeWindows}</Text>
+          {settings.nudgeWindows.map((window, index) => (
+            <View key={index} style={styles.nudgeWindow}>
+              <Stepper
+                label={t.nudgeWindowStart}
+                value={clockTime(window.start)}
+                onLess={() => changeWindow(index, movedWindow(window, "start", -1))}
+                onMore={() => changeWindow(index, movedWindow(window, "start", 1))}
+                disabled={saving}
+              />
+              <Stepper
+                label={t.nudgeWindowEnd}
+                value={clockTime(window.end)}
+                onLess={() => changeWindow(index, movedWindow(window, "end", -1))}
+                onMore={() => changeWindow(index, movedWindow(window, "end", 1))}
+                disabled={saving}
+              />
+              {settings.nudgeWindows.length > 1 && (
+                <Chip
+                  label={t.removeNudgeWindow}
+                  onPress={() => changeWindow(index, undefined)}
+                />
+              )}
+            </View>
+          ))}
+          <Text style={styles.room}>{t.nudgeWindowsHelp}</Text>
+          <Button
+            label={t.addNudgeWindow}
+            onPress={() =>
+              change({ nudgeWindows: [...settings.nudgeWindows, NEW_NUDGE_WINDOW] })
+            }
+            disabled={saving}
+            quiet
+          />
+
+          <Text style={styles.label}>{t.dailyNudgeCap}</Text>
+          <Stepper
+            label={t.dailyNudgeCap}
+            value={String(settings.dailyNudgeCap)}
+            onLess={() => change({ dailyNudgeCap: settings.dailyNudgeCap - 1 })}
+            onMore={() => change({ dailyNudgeCap: settings.dailyNudgeCap + 1 })}
+            lessDisabled={settings.dailyNudgeCap <= 1}
+            moreDisabled={settings.dailyNudgeCap >= DAILY_NUDGE_CAP_MAX}
+            disabled={saving}
+          />
+          <Text style={styles.room}>{t.dailyNudgeCapHelp}</Text>
+
+          <Text style={styles.label}>{t.timeZone}</Text>
+          <TextInput
+            style={styles.input}
+            value={timeZoneText}
+            onChangeText={setTimeZoneText}
+            onEndEditing={() => chooseTimeZone(timeZoneText)}
+            accessibilityLabel={t.timeZone}
+            autoCapitalize="none"
+            autoCorrect={false}
+            editable={!saving}
+          />
+          {timeZoneUnknown && (
+            <Text style={styles.problem}>{t.timeZoneUnknown}</Text>
+          )}
+          {timeZone !== phoneZone && (
+            <Button
+              label={t.usePhoneTimeZone(phoneZone)}
+              onPress={() => chooseTimeZone(phoneZone)}
+              disabled={saving}
+              quiet
+            />
+          )}
+        </>
+      )}
+
       {saveFailed && <Text style={styles.problem}>{t.settingsSaveFailed}</Text>}
       <View style={styles.fill} />
       <Button label={t.back} onPress={onClose} disabled={saving} quiet />
     </ScrollView>
+  );
+}
+
+/** A value with buttons to lower and raise it. */
+function Stepper({
+  label,
+  value,
+  onLess,
+  onMore,
+  disabled,
+  lessDisabled,
+  moreDisabled,
+}: {
+  label: string;
+  value: string;
+  onLess: () => void;
+  onMore: () => void;
+  disabled?: boolean;
+  lessDisabled?: boolean;
+  moreDisabled?: boolean;
+}) {
+  return (
+    <View style={styles.stepper}>
+      <Text style={styles.stepperLabel}>{label}</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t.lower(label)}
+        onPress={onLess}
+        disabled={disabled || lessDisabled}
+        style={styles.stepperButton}
+      >
+        <Text style={styles.stepperButtonLabel}>−</Text>
+      </Pressable>
+      <Text style={styles.stepperValue}>{value}</Text>
+      <Pressable
+        accessibilityRole="button"
+        accessibilityLabel={t.raise(label)}
+        onPress={onMore}
+        disabled={disabled || moreDisabled}
+        style={styles.stepperButton}
+      >
+        <Text style={styles.stepperButtonLabel}>+</Text>
+      </Pressable>
+    </View>
   );
 }
 
@@ -1095,6 +1301,31 @@ const styles = StyleSheet.create({
   quizAnswerInput: { marginTop: 8 },
   essenceInput: { minHeight: 120, textAlignVertical: "top" },
   room: { fontSize: 13, color: "#555", marginTop: 4 },
+  nudgeWindow: {
+    flexDirection: "row",
+    flexWrap: "wrap",
+    alignItems: "center",
+    gap: 12,
+    marginVertical: 4,
+  },
+  stepper: { flexDirection: "row", alignItems: "center", gap: 8 },
+  stepperLabel: { fontSize: 14, color: "#555" },
+  stepperButton: {
+    borderWidth: 1,
+    borderColor: "#ccc",
+    borderRadius: 8,
+    width: 36,
+    height: 36,
+    alignItems: "center",
+    justifyContent: "center",
+  },
+  stepperButtonLabel: { fontSize: 18 },
+  stepperValue: {
+    fontSize: 16,
+    minWidth: 48,
+    textAlign: "center",
+    fontVariant: ["tabular-nums"],
+  },
   over: { color: "#b3261e" },
   problem: { fontSize: 14, color: "#b3261e", marginTop: 8 },
   button: {

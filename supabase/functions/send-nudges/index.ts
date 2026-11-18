@@ -4,12 +4,16 @@
 // for a due date, even if two runs overlap.
 import { createClient } from "@supabase/supabase-js";
 import {
-  NEWLY_DUE_MS,
+  DEFAULT_NUDGE_SETTINGS,
   NUDGE_CHANNEL_ID,
+  nudgeGroupMessage,
   nudgeMessage,
   planNudges,
   type NudgeCandidate,
+  type NudgedCard,
   type NudgeLanguage,
+  type NudgeSettings,
+  type NudgeWindow,
   type PlannedNudge,
   type SentNudge,
 } from "../_shared/nudges.ts";
@@ -18,6 +22,8 @@ const EXPO_PUSH_URL = "https://exp.host/--/api/v2/push/send";
 const EXPO_BATCH_SIZE = 100;
 /** Keeps `in (...)` filters within URL length limits. */
 const QUERY_CHUNK_SIZE = 200;
+/** Covers the user's local day, whatever their time zone. */
+const SENT_LOOKBACK_MS = 48 * 60 * 60 * 1000;
 
 type CandidateRow = {
   user_id: string;
@@ -28,7 +34,21 @@ type CandidateRow = {
   archived: boolean;
 };
 
+type SettingsRow = {
+  user_id: string;
+  nudges_on: boolean;
+  nudge_windows: NudgeWindow[];
+  daily_nudge_cap: number;
+  time_zone: string | null;
+};
+
 type PushToken = { token: string; user_id: string; language: NudgeLanguage };
+
+/** A Nudge planned for an Account. */
+type Outgoing = {
+  userId: string;
+  nudge: PlannedNudge;
+};
 
 type ExpoTicket =
   | { status: "ok"; id: string }
@@ -63,6 +83,10 @@ function groupBy<T>(items: T[], keyOf: (item: T) => string): Map<string, T[]> {
   return groups;
 }
 
+function nudgedCards(nudge: PlannedNudge): NudgedCard[] {
+  return nudge.kind === "card" ? [nudge] : nudge.cards;
+}
+
 function chunks<T>(items: T[], size: number): T[][] {
   const result: T[][] = [];
   for (let start = 0; start < items.length; start += size) {
@@ -87,33 +111,54 @@ Deno.serve(async (request) => {
   });
   const now = new Date();
 
-  // The newly due Cards, by Account.
+  // The due Cards not yet nudged, by Account.
   const { data: candidates, error: candidatesError } = await admin.rpc(
     "nudge_candidates",
-    {
-      due_after: new Date(now.getTime() - NEWLY_DUE_MS).toISOString(),
-      due_by: now.toISOString(),
-    },
+    { due_by: now.toISOString() },
   );
   if (candidatesError) throw candidatesError;
   const byUser = groupBy(candidates as CandidateRow[], ({ user_id }) => user_id);
+  const userIds = [...byUser.keys()];
 
-  // The Nudges already sent for those Cards.
-  const sent: SentNudge[] = [];
-  const cardIds = (candidates as CandidateRow[]).map(({ card_id }) => card_id);
-  for (const ids of chunks(cardIds, QUERY_CHUNK_SIZE)) {
-    const { data, error } = await admin
+  // Their choices about Nudges, and the Nudges they had lately, which the
+  // daily cap counts.
+  const settingsByUser = new Map<string, NudgeSettings>();
+  const sent: (SentNudge & { userId: string })[] = [];
+  const sentSince = new Date(now.getTime() - SENT_LOOKBACK_MS).toISOString();
+  for (const ids of chunks(userIds, QUERY_CHUNK_SIZE)) {
+    const settings = await admin
+      .from("settings")
+      .select("user_id, nudges_on, nudge_windows, daily_nudge_cap, time_zone")
+      .in("user_id", ids);
+    if (settings.error) throw settings.error;
+    for (const row of settings.data as SettingsRow[]) {
+      settingsByUser.set(row.user_id, {
+        nudgesOn: row.nudges_on,
+        nudgeWindows: row.nudge_windows,
+        dailyNudgeCap: row.daily_nudge_cap,
+        timeZone: row.time_zone,
+      });
+    }
+
+    const nudges = await admin
       .from("nudges")
-      .select("card_id, due_at")
-      .in("card_id", ids);
-    if (error) throw error;
-    for (const row of data) {
-      sent.push({ cardId: row.card_id, dueAt: new Date(row.due_at) });
+      .select("user_id, card_id, due_at, sent_at, grouped")
+      .in("user_id", ids)
+      .gte("sent_at", sentSince);
+    if (nudges.error) throw nudges.error;
+    for (const row of nudges.data) {
+      sent.push({
+        userId: row.user_id,
+        cardId: row.card_id,
+        dueAt: new Date(row.due_at),
+        sentAt: new Date(row.sent_at),
+        grouped: row.grouped,
+      });
     }
   }
-  const sentByCard = groupBy(sent, ({ cardId }) => cardId);
+  const sentByUser = groupBy(sent, ({ userId }) => userId);
 
-  const planned: (PlannedNudge & { userId: string })[] = [];
+  const planned: Outgoing[] = [];
   for (const [userId, rows] of byUser) {
     const cards: NudgeCandidate[] = rows.map((row) => ({
       id: row.card_id,
@@ -123,35 +168,45 @@ Deno.serve(async (request) => {
     }));
     const nudges = planNudges({
       linked: rows[0]!.linked,
+      settings: settingsByUser.get(userId) ?? DEFAULT_NUDGE_SETTINGS,
       cards,
-      sent: cards.flatMap(({ id }) => sentByCard.get(id) ?? []),
+      sent: sentByUser.get(userId) ?? [],
       now,
     });
-    for (const nudge of nudges) planned.push({ ...nudge, userId });
+    for (const nudge of nudges) planned.push({ userId, nudge });
   }
-  if (planned.length === 0) return Response.json({ sent: 0 });
+  if (planned.length === 0) return Response.json({ nudges: 0 });
 
-  // Logging claims each Nudge: a row another run already wrote is skipped
+  // Logging claims each Card: a row another run already wrote is skipped
   // and not returned, so only this run's Nudges are sent.
   const { data: claimed, error: claimError } = await admin
     .from("nudges")
     .upsert(
-      planned.map(({ userId, cardId, dueAt }) => ({
-        user_id: userId,
-        card_id: cardId,
-        due_at: dueAt.toISOString(),
-        sent_at: now.toISOString(),
-      })),
+      planned.flatMap(({ userId, nudge }) =>
+        nudgedCards(nudge).map(({ cardId, dueAt }) => ({
+          user_id: userId,
+          card_id: cardId,
+          due_at: dueAt.toISOString(),
+          sent_at: now.toISOString(),
+          grouped: nudge.kind === "group",
+        })),
+      ),
       { onConflict: "card_id,due_at", ignoreDuplicates: true },
     )
     .select("card_id");
   if (claimError) throw claimError;
   const claimedIds = new Set(claimed.map(({ card_id }) => card_id));
-  const toSend = planned.filter(({ cardId }) => claimedIds.has(cardId));
+  const toSend = planned.flatMap(({ userId, nudge }): Outgoing[] => {
+    if (nudge.kind === "card") {
+      return claimedIds.has(nudge.cardId) ? [{ userId, nudge }] : [];
+    }
+    const cards = nudge.cards.filter(({ cardId }) => claimedIds.has(cardId));
+    return cards.length > 0 ? [{ userId, nudge: { kind: "group", cards } }] : [];
+  });
 
   const tokens: PushToken[] = [];
-  const userIds = [...new Set(toSend.map(({ userId }) => userId))];
-  for (const ids of chunks(userIds, QUERY_CHUNK_SIZE)) {
+  const sendingTo = [...new Set(toSend.map(({ userId }) => userId))];
+  for (const ids of chunks(sendingTo, QUERY_CHUNK_SIZE)) {
     const { data, error } = await admin
       .from("push_tokens")
       .select("token, user_id, language")
@@ -161,12 +216,20 @@ Deno.serve(async (request) => {
   }
   const tokensByUser = groupBy(tokens, ({ user_id }) => user_id);
 
-  const messages = toSend.flatMap(({ userId, cardId, cue }) =>
+  const messages = toSend.flatMap(({ userId, nudge }) =>
     (tokensByUser.get(userId) ?? []).map(({ token, language }) => ({
       to: token,
-      ...nudgeMessage(cue, language),
-      // Tapping the Nudge opens this Card's Review.
-      data: { cardId },
+      ...(nudge.kind === "card"
+        ? {
+            ...nudgeMessage(nudge.cue, language),
+            // Tapping the Nudge opens this Card's Review.
+            data: { cardId: nudge.cardId },
+          }
+        : {
+            ...nudgeGroupMessage(nudge.cards.length, language),
+            // Tapping the grouped Nudge opens the run of due Cards.
+            data: { due: true },
+          }),
       channelId: NUDGE_CHANNEL_ID,
       sound: "default",
     })),
