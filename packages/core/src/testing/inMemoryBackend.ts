@@ -1,9 +1,12 @@
-import type {
-  AccountStore,
-  Card,
-  CardStore,
-  Review,
-  SignInMethod,
+import {
+  DEFAULT_SETTINGS,
+  type AccountStore,
+  type Card,
+  type CardStore,
+  type Review,
+  type Settings,
+  type SettingsStore,
+  type SignInMethod,
 } from "../index";
 
 type StoredAccount = { id: string; identities: Set<string>; anonymous: boolean };
@@ -18,6 +21,7 @@ export function inMemoryBackend() {
   const users = new Map<string, StoredAccount>();
   let cards: Owned<Card>[] = [];
   let reviews: Owned<Review>[] = [];
+  const settingsByUser = new Map<string, Settings>();
   let nextId = 1;
 
   function newUser(anonymous: boolean): StoredAccount {
@@ -84,7 +88,12 @@ export function inMemoryBackend() {
         );
         if (index === -1) throw new Error(`Card ${card.id} not found`);
         const stored = cards[index] as Owned<Card>;
-        cards[index] = { ...stored, dueAt: card.dueAt, schedule: card.schedule };
+        cards[index] = {
+          ...stored,
+          dueAt: card.dueAt,
+          schedule: card.schedule,
+          quizTurn: card.quizTurn,
+        };
         reviews.push({ ...review, userId: user.id });
       },
       async remove(cardId) {
@@ -98,6 +107,17 @@ export function inMemoryBackend() {
         return reviews
           .filter((review) => review.cardId === cardId && review.userId === user.id)
           .map(strip<Review>);
+      },
+    };
+
+    const settings: SettingsStore = {
+      async get() {
+        return { ...(settingsByUser.get(user.id) ?? DEFAULT_SETTINGS) };
+      },
+      async update(changes) {
+        const updated = { ...(await settings.get()), ...changes };
+        settingsByUser.set(user.id, updated);
+        return { ...updated };
       },
     };
 
@@ -138,6 +158,7 @@ export function inMemoryBackend() {
         users.delete(deleted);
         cards = cards.filter(({ userId }) => userId !== deleted);
         reviews = reviews.filter(({ userId }) => userId !== deleted);
+        settingsByUser.delete(deleted);
         user = newUser(true);
       },
     };
@@ -145,6 +166,7 @@ export function inMemoryBackend() {
     return {
       cards: cardStore,
       accounts,
+      settings,
       /** The last link emailed from this device, for the test to open. */
       lastEmailLink() {
         if (!lastEmailLink) throw new Error("No email link was sent");

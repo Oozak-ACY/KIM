@@ -1,9 +1,10 @@
-import type { CardProblem } from "@kim/core";
+import type { CardProblem, QuizOutcome } from "@kim/core";
 import {
   CUE_MAX_CHARACTERS,
   ESSENCE_MAX_CHARACTERS,
   ESSENCE_MAX_LINES,
   HINTS_MAX_CHARACTERS,
+  QUIZ_QUESTIONS_MAX,
 } from "@kim/core";
 import { getLocales } from "expo-localization";
 
@@ -50,6 +51,22 @@ type Messages = {
   stopReview: string;
   reviewSaveFailed: string;
   problems: Record<CardProblem, string>;
+  quizMode: string;
+  quizModeMarker: string;
+  quizModeNeedsQuestions: string;
+  quizQuestionLabel: (number: number) => string;
+  quizQuestionPlaceholder: string;
+  quizAnswerLabel: (number: number) => string;
+  quizAnswerPlaceholder: string;
+  addQuizQuestion: string;
+  removeQuizQuestion: string;
+  removeQuizQuestionNumber: (number: number) => string;
+  revealAnswer: string;
+  quizOutcomes: Record<QuizOutcome, string>;
+  settings: string;
+  newCardsInQuizMode: string;
+  newCardsInQuizModeHelp: string;
+  settingsSaveFailed: string;
   account: string;
   signIn: string;
   back: string;
@@ -132,7 +149,29 @@ const en: Messages = {
     "essence-too-long": `Keep the Essence to ${ESSENCE_MAX_CHARACTERS} characters.`,
     "essence-too-many-lines": `Keep the Essence to ${ESSENCE_MAX_LINES} lines.`,
     "hints-too-long": `Keep the Hints to ${HINTS_MAX_CHARACTERS} characters.`,
+    "too-many-quiz-questions": `Keep to ${QUIZ_QUESTIONS_MAX} Quiz questions.`,
+    "quiz-question-missing": "Write each Quiz question, or remove it.",
+    "quiz-answer-missing": "Write the expected answer to each Quiz question.",
   },
+  quizMode: "Quiz mode",
+  quizModeMarker: "Quiz",
+  quizModeNeedsQuestions:
+    "Add a Quiz question: until then, this Card is reviewed by its Cue.",
+  quizQuestionLabel: (number) => `Quiz question ${number}`,
+  quizQuestionPlaceholder: "A question about this Card",
+  quizAnswerLabel: (number) => `Expected answer ${number}`,
+  quizAnswerPlaceholder: "The answer you expect",
+  addQuizQuestion: "Add a Quiz question",
+  removeQuizQuestion: "Remove",
+  removeQuizQuestionNumber: (number) => `Remove Quiz question ${number}`,
+  revealAnswer: "Show the answer",
+  quizOutcomes: { forgot: "Forgot", hard: "Hard", good: "Good" },
+  settings: "Settings",
+  newCardsInQuizMode: "New Cards start in Quiz mode",
+  newCardsInQuizModeHelp:
+    "You can still switch each Card between Quiz mode and Recall mode.",
+  settingsSaveFailed:
+    "The setting could not be saved. Check your connection and try again.",
   account: "Account",
   signIn: "Sign in",
   back: "Back",
@@ -216,7 +255,29 @@ const fr: Messages = {
     "essence-too-long": `Limitez l'Essentiel à ${ESSENCE_MAX_CHARACTERS} caractères.`,
     "essence-too-many-lines": `Limitez l'Essentiel à ${ESSENCE_MAX_LINES} lignes.`,
     "hints-too-long": `Limitez les Indices à ${HINTS_MAX_CHARACTERS} caractères.`,
+    "too-many-quiz-questions": `Limitez-vous à ${QUIZ_QUESTIONS_MAX} questions de Quiz.`,
+    "quiz-question-missing": "Écrivez chaque question de Quiz, ou retirez-la.",
+    "quiz-answer-missing": "Écrivez la réponse attendue à chaque question de Quiz.",
   },
+  quizMode: "Mode Quiz",
+  quizModeMarker: "Quiz",
+  quizModeNeedsQuestions:
+    "Ajoutez une question de Quiz : d'ici là, cette Carte est révisée par son Repère.",
+  quizQuestionLabel: (number) => `Question de Quiz ${number}`,
+  quizQuestionPlaceholder: "Une question sur cette Carte",
+  quizAnswerLabel: (number) => `Réponse attendue ${number}`,
+  quizAnswerPlaceholder: "La réponse que vous attendez",
+  addQuizQuestion: "Ajouter une question de Quiz",
+  removeQuizQuestion: "Retirer",
+  removeQuizQuestionNumber: (number) => `Retirer la question de Quiz ${number}`,
+  revealAnswer: "Afficher la réponse",
+  quizOutcomes: { forgot: "Oublié", hard: "Difficile", good: "Bien" },
+  settings: "Réglages",
+  newCardsInQuizMode: "Les nouvelles Cartes commencent en mode Quiz",
+  newCardsInQuizModeHelp:
+    "Vous pouvez toujours passer chaque Carte du mode Quiz au mode Rappel.",
+  settingsSaveFailed:
+    "Impossible d'enregistrer le réglage. Vérifiez votre connexion et réessayez.",
   account: "Compte",
   signIn: "Se connecter",
   back: "Retour",

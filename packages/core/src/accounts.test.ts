@@ -9,7 +9,12 @@ function setup() {
     const connection = backend.device(person);
     return {
       ...connection,
-      core: createCore({ clock, cards: connection.cards, accounts: connection.accounts }),
+      core: createCore({
+        clock,
+        cards: connection.cards,
+        accounts: connection.accounts,
+        settings: connection.settings,
+      }),
     };
   };
   return { backend, device };

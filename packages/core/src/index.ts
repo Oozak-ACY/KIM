@@ -13,6 +13,12 @@ export type Card = {
   essence: string;
   /** An optional mnemonic, analogy or example; empty when there is none. */
   hints: string;
+  /** Asked in turn by Quiz mode Reviews; at most QUIZ_QUESTIONS_MAX. */
+  quizQuestions: QuizQuestion[];
+  /** Reviewed with a Quiz question rather than by its Cue. */
+  quizMode: boolean;
+  /** How many Quiz mode Reviews the Card has had, to rotate its Quiz questions. */
+  quizTurn: number;
   tags: string[];
   /** Kept and searchable, but never due. */
   archived: boolean;
@@ -21,14 +27,29 @@ export type Card = {
   schedule: Schedule;
 };
 
+/** A question about a Card with the answer the user expects. */
+export type QuizQuestion = { question: string; answer: string };
+
 export type NewCard = Omit<Card, "id">;
 
 /** Fields of a Card a store changes in place; the others are left alone. */
 export type CardChanges = Partial<Omit<Card, "id" | "createdAt">>;
 
 export type ReviewChannel = "app";
-export type ReviewMode = "recall";
+export type ReviewMode = "recall" | "quiz";
+
+/** How a Card is reviewed next, with the Quiz question to ask in Quiz mode. */
+export type ReviewStyle =
+  | { mode: "recall" }
+  | { mode: "quiz"; quizQuestion: QuizQuestion };
 export type RecallOutcome = "remembered" | "forgotten";
+/** How the user grades their answer to a Quiz question. */
+export type QuizOutcome = "forgot" | "hard" | "good";
+
+/** A Review to record: a Recall mode or a Quiz mode one, with its outcome. */
+export type ReviewAnswer =
+  | { mode: "recall"; outcome: RecallOutcome }
+  | { mode: "quiz"; outcome: QuizOutcome };
 
 export type Review = {
   cardId: string;
@@ -44,13 +65,29 @@ export type CardStore = {
   /** Changes the given fields of the Card and returns it. */
   update(cardId: string, changes: CardChanges): Promise<Card>;
   /**
-   * Saves the Card's new due date and schedule with its Review, or neither.
-   * The rest of the Card is left alone, as it may have changed since.
+   * Saves the Card's new due date, schedule and Quiz turn with its Review,
+   * or none of them. The rest of the Card is left alone, as it may have
+   * changed since.
    */
   recordReview(card: Card, review: Review): Promise<void>;
   listReviews(cardId: string): Promise<Review[]>;
   /** Deletes the Card and its Reviews for good. */
   remove(cardId: string): Promise<void>;
+};
+
+/** The user's choices, kept with their Account. */
+export type Settings = {
+  /** Whether a newly created Card starts in Quiz mode. */
+  newCardsInQuizMode: boolean;
+};
+
+export const DEFAULT_SETTINGS: Settings = { newCardsInQuizMode: false };
+
+export type SettingsStore = {
+  /** The current Account's Settings, or the defaults if never changed. */
+  get(): Promise<Settings>;
+  /** Changes the given Settings and returns them all. */
+  update(changes: Partial<Settings>): Promise<Settings>;
 };
 
 export type Clock = {
@@ -102,14 +139,38 @@ export const CUE_MAX_CHARACTERS = 100;
 export const ESSENCE_MAX_CHARACTERS = 280;
 export const ESSENCE_MAX_LINES = 3;
 export const HINTS_MAX_CHARACTERS = 280;
+export const QUIZ_QUESTIONS_MAX = 3;
 
 const RECALL_GRADES: Record<RecallOutcome, Grade> = {
   remembered: "good",
   forgotten: "again",
 };
 
+const QUIZ_GRADES: Record<QuizOutcome, Grade> = {
+  forgot: "again",
+  hard: "hard",
+  good: "good",
+};
+
+function gradeOf(answer: ReviewAnswer): Grade {
+  return answer.mode === "quiz"
+    ? QUIZ_GRADES[answer.outcome]
+    : RECALL_GRADES[answer.outcome];
+}
+
 /** What the user writes on a Card. */
-export type CardContent = { cue: string; essence: string; hints?: string };
+export type CardContent = {
+  cue: string;
+  essence: string;
+  hints?: string;
+  quizQuestions?: QuizQuestion[];
+};
+
+/**
+ * A Card as written in the form. Left out, Quiz mode follows the setting for
+ * a new Card and stays as it was for an edited one.
+ */
+export type CardDraft = CardContent & { quizMode?: boolean };
 
 export type CardProblem =
   | "cue-missing"
@@ -117,7 +178,10 @@ export type CardProblem =
   | "essence-missing"
   | "essence-too-long"
   | "essence-too-many-lines"
-  | "hints-too-long";
+  | "hints-too-long"
+  | "too-many-quiz-questions"
+  | "quiz-question-missing"
+  | "quiz-answer-missing";
 
 export type CardResult =
   | { ok: true; card: Card }
@@ -155,17 +219,34 @@ function findProblems(input: Required<CardContent>): CardProblem[] {
   if (characterCount(input.hints) > HINTS_MAX_CHARACTERS) {
     problems.push("hints-too-long");
   }
+  if (input.quizQuestions.length > QUIZ_QUESTIONS_MAX) {
+    problems.push("too-many-quiz-questions");
+  }
+  if (input.quizQuestions.some(({ question }) => question.trim() === "")) {
+    problems.push("quiz-question-missing");
+  }
+  if (input.quizQuestions.some(({ answer }) => answer.trim() === "")) {
+    problems.push("quiz-answer-missing");
+  }
   return problems;
 }
 
-/** The content as stored, with no Hints spelled out as empty. */
+/** The content as stored, with no Hints or Quiz questions spelled out as empty. */
 function checkContent({
   hints = "",
+  quizQuestions = [],
   ...input
 }: CardContent):
   | { ok: true; content: Required<CardContent> }
   | { ok: false; problems: CardProblem[] } {
-  const content = { ...input, hints };
+  const content = {
+    ...input,
+    hints,
+    quizQuestions: quizQuestions.map(({ question, answer }) => ({
+      question,
+      answer,
+    })),
+  };
   const problems = findProblems(content);
   return problems.length > 0 ? { ok: false, problems } : { ok: true, content };
 }
@@ -224,14 +305,28 @@ export function tagsInUse(cards: Pick<Card, "tags">[]): string[] {
   );
 }
 
+/**
+ * Quiz mode asks the Card's Quiz questions in turn. A Card in Quiz mode
+ * with no Quiz questions is reviewed in Recall mode.
+ */
+export function reviewStyle(card: Card): ReviewStyle {
+  const { quizQuestions, quizTurn } = card;
+  const quizQuestion = quizQuestions[quizTurn % quizQuestions.length];
+  return card.quizMode && quizQuestion
+    ? { mode: "quiz", quizQuestion }
+    : { mode: "recall" };
+}
+
 export function createCore({
   clock,
   cards,
   accounts,
+  settings,
 }: {
   clock: Clock;
   cards: CardStore;
   accounts: AccountStore;
+  settings: SettingsStore;
 }) {
   /**
    * Runs a step that may switch this device to another account. Cards made
@@ -283,13 +378,23 @@ export function createCore({
       return accounts.deleteAccount();
     },
 
-    async createCard(input: CardContent): Promise<CardResult> {
+    settings(): Promise<Settings> {
+      return settings.get();
+    },
+
+    changeSettings(changes: Partial<Settings>): Promise<Settings> {
+      return settings.update(changes);
+    },
+
+    async createCard({ quizMode, ...input }: CardDraft): Promise<CardResult> {
       const checked = checkContent(input);
       if (!checked.ok) return checked;
 
       const now = clock.now();
       const card = await cards.add({
         ...checked.content,
+        quizMode: quizMode ?? (await settings.get()).newCardsInQuizMode,
+        quizTurn: 0,
         tags: [],
         archived: false,
         createdAt: now,
@@ -314,17 +419,24 @@ export function createCore({
     /** Changes what the Card says; its schedule and Reviews stay. */
     async editCard(
       cardId: string,
-      input: CardContent,
+      { quizMode, ...input }: CardDraft,
     ): Promise<CardResult> {
       const checked = checkContent(input);
       if (!checked.ok) return checked;
-      const card = await cards.update(cardId, checked.content);
+      const card = await cards.update(cardId, {
+        ...checked.content,
+        ...(quizMode !== undefined && { quizMode }),
+      });
       return { ok: true, card };
     },
 
     /** Forgets the Card's progress: it is scheduled again as a new Card. */
     async restartLearning(cardId: string): Promise<Card> {
       return cards.update(cardId, await firstSchedule(clock.now()));
+    },
+
+    setQuizMode(cardId: string, on: boolean): Promise<Card> {
+      return cards.update(cardId, { quizMode: on });
     },
 
     archiveCard(cardId: string): Promise<Card> {
@@ -351,27 +463,23 @@ export function createCore({
 
     async recordReview({
       card,
-      mode,
-      outcome,
       channel,
-    }: {
-      card: Card;
-      mode: ReviewMode;
-      outcome: RecallOutcome;
-      channel: ReviewChannel;
-    }): Promise<Card> {
+      ...answer
+    }: { card: Card; channel: ReviewChannel } & ReviewAnswer): Promise<Card> {
       const reviewedAt = clock.now();
-      const grade = RECALL_GRADES[outcome];
+      const grade = gradeOf(answer);
       const reviewed = {
         ...card,
         ...(await nextSchedule(card, grade, reviewedAt)),
+        // The next Quiz mode Review asks the following Quiz question.
+        quizTurn: answer.mode === "quiz" ? card.quizTurn + 1 : card.quizTurn,
       };
       await cards.recordReview(reviewed, {
         cardId: card.id,
         reviewedAt,
         grade,
         channel,
-        mode,
+        mode: answer.mode,
       });
       return reviewed;
     },

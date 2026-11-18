@@ -10,9 +10,13 @@ export type Schedule = Record<string, unknown>;
 
 export type ScheduledCard = { dueAt: Date; schedule: Schedule };
 
-export type Grade = "again" | "good";
+export type Grade = "again" | "hard" | "good";
 
-const RATINGS = { again: Rating.Again, good: Rating.Good } as const;
+const RATINGS = {
+  again: Rating.Again,
+  hard: Rating.Hard,
+  good: Rating.Good,
+} as const;
 
 const scheduler = DefaultScheduler();
 

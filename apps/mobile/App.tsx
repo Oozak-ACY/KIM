@@ -9,6 +9,7 @@ import {
   Pressable,
   ScrollView,
   StyleSheet,
+  Switch,
   Text,
   TextInput,
   View,
@@ -20,22 +21,28 @@ import {
   createCore,
   essenceRoom,
   matchingCards,
+  reviewStyle,
   tagsInUse,
   type Account,
   type Card,
+  QUIZ_QUESTIONS_MAX,
   type CardProblem,
-  type RecallOutcome,
+  type QuizQuestion,
+  type ReviewAnswer,
+  type Settings,
   type SignInMethod,
 } from "@kim/core";
 import { t } from "./src/i18n";
 import { ensureSession } from "./src/supabase";
 import { isEmailLink, supabaseAccountStore } from "./src/supabaseAccountStore";
 import { supabaseCardStore } from "./src/supabaseCardStore";
+import { supabaseSettingsStore } from "./src/supabaseSettingsStore";
 
 const core = createCore({
   clock: { now: () => new Date() },
   cards: supabaseCardStore,
   accounts: supabaseAccountStore,
+  settings: supabaseSettingsStore,
 });
 
 export default function App() {
@@ -58,12 +65,14 @@ function Cards() {
   const [cards, setCards] = useState<Card[] | null>(null);
   const [dueCards, setDueCards] = useState<Card[]>([]);
   const [account, setAccount] = useState<Account>();
+  const [settings, setSettings] = useState<Settings>();
   const [loadFailed, setLoadFailed] = useState(false);
   const [emailLinkFailed, setEmailLinkFailed] = useState(false);
   const [creating, setCreating] = useState(false);
   const [editing, setEditing] = useState<Card>();
   const [reviewing, setReviewing] = useState(false);
   const [managingAccount, setManagingAccount] = useState(false);
+  const [changingSettings, setChangingSettings] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [selectedTag, setSelectedTag] = useState<string>();
 
@@ -71,14 +80,16 @@ function Cards() {
     setLoadFailed(false);
     try {
       await ensureSession();
-      const [listed, due, current] = await Promise.all([
+      const [listed, due, current, chosen] = await Promise.all([
         core.listCards(),
         core.dueCards(),
         core.account(),
+        core.settings(),
       ]);
       setCards(listed);
       setDueCards(due);
       setAccount(current);
+      setSettings(chosen);
     } catch {
       setLoadFailed(true);
     }
@@ -124,7 +135,7 @@ function Cards() {
     );
   }
 
-  if (cards === null || account === undefined) {
+  if (cards === null || account === undefined || settings === undefined) {
     return (
       <View style={styles.centered}>
         <ActivityIndicator />
@@ -140,6 +151,7 @@ function Cards() {
     return (
       <CardForm
         card={editing}
+        startInQuizMode={settings.newCardsInQuizMode}
         onCancel={close}
         onDone={() => {
           close();
@@ -155,6 +167,16 @@ function Cards() {
         account={account}
         onChanged={load}
         onClose={() => setManagingAccount(false)}
+      />
+    );
+  }
+
+  if (changingSettings) {
+    return (
+      <SettingsScreen
+        settings={settings}
+        onChanged={setSettings}
+        onClose={() => setChangingSettings(false)}
       />
     );
   }
@@ -180,10 +202,13 @@ function Cards() {
     <View style={styles.fill}>
       <View style={styles.header}>
         <Text style={styles.title}>{t.cardsTitle}</Text>
-        <Chip
-          label={account.linked ? t.account : t.signIn}
-          onPress={() => setManagingAccount(true)}
-        />
+        <View style={styles.headerActions}>
+          <Chip label={t.settings} onPress={() => setChangingSettings(true)} />
+          <Chip
+            label={account.linked ? t.account : t.signIn}
+            onPress={() => setManagingAccount(true)}
+          />
+        </View>
       </View>
       {emailLinkFailed && (
         <Text style={styles.problem}>{t.emailLinkFailed}</Text>
@@ -270,6 +295,7 @@ function CardRow({
       {card.hints !== "" && <Text style={styles.hints}>{card.hints}</Text>}
       <Text style={styles.due}>
         {card.archived ? t.archived : due ? t.dueNow : t.nextDue(card.dueAt)}
+        {card.quizMode && ` · ${t.quizModeMarker}`}
       </Text>
       {editingTags ? (
         <TagEditor
@@ -500,6 +526,50 @@ function AccountSettings({
   );
 }
 
+function SettingsScreen({
+  settings,
+  onChanged,
+  onClose,
+}: {
+  settings: Settings;
+  onChanged: (settings: Settings) => void;
+  onClose: () => void;
+}) {
+  const [saving, setSaving] = useState(false);
+  const [saveFailed, setSaveFailed] = useState(false);
+
+  async function change(changes: Partial<Settings>) {
+    setSaving(true);
+    setSaveFailed(false);
+    try {
+      onChanged(await core.changeSettings(changes));
+    } catch {
+      setSaveFailed(true);
+    } finally {
+      setSaving(false);
+    }
+  }
+
+  return (
+    <ScrollView contentContainerStyle={styles.form}>
+      <Text style={styles.title}>{t.settings}</Text>
+      <View style={styles.switchRow}>
+        <Text style={styles.switchLabel}>{t.newCardsInQuizMode}</Text>
+        <Switch
+          value={settings.newCardsInQuizMode}
+          onValueChange={(on) => change({ newCardsInQuizMode: on })}
+          disabled={saving}
+          accessibilityLabel={t.newCardsInQuizMode}
+        />
+      </View>
+      <Text style={styles.room}>{t.newCardsInQuizModeHelp}</Text>
+      {saveFailed && <Text style={styles.problem}>{t.settingsSaveFailed}</Text>}
+      <View style={styles.fill} />
+      <Button label={t.back} onPress={onClose} disabled={saving} quiet />
+    </ScrollView>
+  );
+}
+
 function Reviews({ cards, onDone }: { cards: Card[]; onDone: () => void }) {
   const [position, setPosition] = useState(0);
   const [revealed, setRevealed] = useState(false);
@@ -509,16 +579,13 @@ function Reviews({ cards, onDone }: { cards: Card[]; onDone: () => void }) {
 
   if (!card) return null;
 
-  const answer = async (outcome: RecallOutcome) => {
+  const style = reviewStyle(card);
+
+  const record = async (answer: ReviewAnswer) => {
     setSaving(true);
     setSaveFailed(false);
     try {
-      await core.recordReview({
-        card,
-        mode: "recall",
-        outcome,
-        channel: "app",
-      });
+      await core.recordReview({ card, channel: "app", ...answer });
       if (position + 1 === cards.length) {
         onDone();
       } else {
@@ -538,9 +605,21 @@ function Reviews({ cards, onDone }: { cards: Card[]; onDone: () => void }) {
         {t.reviewProgress(position + 1, cards.length)}
       </Text>
       <View style={styles.centered}>
-        <Text style={styles.reviewCue}>{card.cue}</Text>
+        {style.mode === "quiz" ? (
+          <>
+            <Text style={styles.reviewQuizCue}>{card.cue}</Text>
+            <Text style={styles.reviewCue}>{style.quizQuestion.question}</Text>
+          </>
+        ) : (
+          <Text style={styles.reviewCue}>{card.cue}</Text>
+        )}
         {revealed && (
           <>
+            {style.mode === "quiz" && (
+              <Text style={styles.reviewAnswer}>
+                {style.quizQuestion.answer}
+              </Text>
+            )}
             <Text style={styles.reviewEssence}>{card.essence}</Text>
             {card.hints !== "" && (
               <Text style={styles.reviewHints}>{card.hints}</Text>
@@ -549,21 +628,36 @@ function Reviews({ cards, onDone }: { cards: Card[]; onDone: () => void }) {
         )}
       </View>
       {saveFailed && <Text style={styles.problem}>{t.reviewSaveFailed}</Text>}
-      {revealed ? (
+      {!revealed ? (
+        <Button
+          label={style.mode === "quiz" ? t.revealAnswer : t.revealEssence}
+          onPress={() => setRevealed(true)}
+        />
+      ) : style.mode === "quiz" ? (
+        <View style={styles.grades}>
+          {(["forgot", "hard", "good"] as const).map((outcome) => (
+            <View key={outcome} style={styles.fill}>
+              <Button
+                label={t.quizOutcomes[outcome]}
+                onPress={() => record({ mode: "quiz", outcome })}
+                disabled={saving}
+              />
+            </View>
+          ))}
+        </View>
+      ) : (
         <>
           <Button
             label={t.remembered}
-            onPress={() => answer("remembered")}
+            onPress={() => record({ mode: "recall", outcome: "remembered" })}
             disabled={saving}
           />
           <Button
             label={t.forgotten}
-            onPress={() => answer("forgotten")}
+            onPress={() => record({ mode: "recall", outcome: "forgotten" })}
             disabled={saving}
           />
         </>
-      ) : (
-        <Button label={t.revealEssence} onPress={() => setRevealed(true)} />
       )}
       <Button label={t.stopReview} onPress={onDone} disabled={saving} quiet />
     </View>
@@ -573,16 +667,22 @@ function Reviews({ cards, onDone }: { cards: Card[]; onDone: () => void }) {
 /** Creates a Card, or edits one and offers the rest of its care. */
 function CardForm({
   card,
+  startInQuizMode,
   onCancel,
   onDone,
 }: {
   card?: Card;
+  startInQuizMode: boolean;
   onCancel: () => void;
   onDone: () => void;
 }) {
   const [cue, setCue] = useState(card?.cue ?? "");
   const [essence, setEssence] = useState(card?.essence ?? "");
   const [hints, setHints] = useState(card?.hints ?? "");
+  const [quizMode, setQuizMode] = useState(card?.quizMode ?? startInQuizMode);
+  const [quizQuestions, setQuizQuestions] = useState<QuizQuestion[]>(
+    card?.quizQuestions ?? [],
+  );
   const [problems, setProblems] = useState<CardProblem[]>([]);
   const [failure, setFailure] = useState<string>();
   const [saving, setSaving] = useState(false);
@@ -603,10 +703,10 @@ function CardForm({
 
   const save = () =>
     run(async () => {
-      const content = { cue, essence, hints };
+      const draft = { cue, essence, hints, quizQuestions, quizMode };
       const result = card
-        ? await core.editCard(card.id, content)
-        : await core.createCard(content);
+        ? await core.editCard(card.id, draft)
+        : await core.createCard(draft);
       if (!result.ok) setProblems(result.problems);
       return result.ok;
     }, t.saveFailed);
@@ -675,6 +775,70 @@ function CardForm({
         accessibilityLabel={t.hintsLabel}
         multiline
       />
+      <View style={styles.switchRow}>
+        <Text style={styles.switchLabel}>{t.quizMode}</Text>
+        <Switch
+          value={quizMode}
+          onValueChange={setQuizMode}
+          accessibilityLabel={t.quizMode}
+        />
+      </View>
+      {quizMode && quizQuestions.length === 0 && (
+        <Text style={styles.room}>{t.quizModeNeedsQuestions}</Text>
+      )}
+      {quizQuestions.map((quizQuestion, index) => {
+        const change = (changes: Partial<QuizQuestion>) => {
+          setQuizQuestions(
+            quizQuestions.map((other, at) =>
+              at === index ? { ...other, ...changes } : other,
+            ),
+          );
+          setProblems([]);
+        };
+        return (
+          <View key={index} style={styles.quizQuestion}>
+            <Text style={styles.label}>{t.quizQuestionLabel(index + 1)}</Text>
+            <TextInput
+              style={styles.input}
+              value={quizQuestion.question}
+              onChangeText={(question) => change({ question })}
+              placeholder={t.quizQuestionPlaceholder}
+              accessibilityLabel={t.quizQuestionLabel(index + 1)}
+              multiline
+            />
+            <TextInput
+              style={[styles.input, styles.quizAnswerInput]}
+              value={quizQuestion.answer}
+              onChangeText={(answer) => change({ answer })}
+              placeholder={t.quizAnswerPlaceholder}
+              accessibilityLabel={t.quizAnswerLabel(index + 1)}
+              multiline
+            />
+            <View style={styles.tags}>
+              <Chip
+                label={t.removeQuizQuestion}
+                accessibilityLabel={t.removeQuizQuestionNumber(index + 1)}
+                onPress={() => {
+                  setQuizQuestions(
+                    quizQuestions.filter((_, at) => at !== index),
+                  );
+                  setProblems([]);
+                }}
+              />
+            </View>
+          </View>
+        );
+      })}
+      {quizQuestions.length < QUIZ_QUESTIONS_MAX && (
+        <View style={styles.tags}>
+          <Chip
+            label={t.addQuizQuestion}
+            onPress={() =>
+              setQuizQuestions([...quizQuestions, { question: "", answer: "" }])
+            }
+          />
+        </View>
+      )}
       {problems.map((problem) => (
         <Text key={problem} style={styles.problem}>
           {t.problems[problem]}
@@ -749,6 +913,7 @@ const styles = StyleSheet.create({
   form: { flexGrow: 1 },
   centered: { flex: 1, alignItems: "center", justifyContent: "center" },
   title: { fontSize: 28, fontWeight: "700", marginVertical: 16 },
+  headerActions: { flexDirection: "row" },
   header: {
     flexDirection: "row",
     alignItems: "center",
@@ -780,6 +945,19 @@ const styles = StyleSheet.create({
   chipLabelSelected: { color: "#fff" },
   progress: { fontSize: 14, color: "#555", marginVertical: 16 },
   reviewCue: { fontSize: 24, fontWeight: "700", textAlign: "center" },
+  reviewQuizCue: {
+    fontSize: 15,
+    color: "#555",
+    textAlign: "center",
+    marginBottom: 8,
+  },
+  reviewAnswer: {
+    fontSize: 20,
+    fontWeight: "600",
+    textAlign: "center",
+    marginTop: 16,
+  },
+  grades: { flexDirection: "row", gap: 8 },
   reviewEssence: {
     fontSize: 18,
     color: "#333",
@@ -801,6 +979,15 @@ const styles = StyleSheet.create({
     padding: 12,
     fontSize: 16,
   },
+  switchRow: {
+    flexDirection: "row",
+    alignItems: "center",
+    justifyContent: "space-between",
+    marginTop: 16,
+  },
+  switchLabel: { fontSize: 16, flex: 1, marginRight: 12 },
+  quizQuestion: { marginTop: 4 },
+  quizAnswerInput: { marginTop: 8 },
   essenceInput: { minHeight: 120, textAlignVertical: "top" },
   room: { fontSize: 13, color: "#555", marginTop: 4 },
   over: { color: "#b3261e" },

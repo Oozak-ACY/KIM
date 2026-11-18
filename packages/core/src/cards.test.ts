@@ -1,11 +1,22 @@
 import { describe, expect, it } from "vitest";
-import { createCore, essenceRoom, matchingCards, tagsInUse } from "./index";
+import {
+  createCore,
+  essenceRoom,
+  matchingCards,
+  reviewStyle,
+  tagsInUse,
+} from "./index";
 import { inMemoryBackend } from "./testing/inMemoryBackend";
 
 function setup(now = "2026-01-15T09:00:00.000Z") {
   let instant = new Date(now);
-  const { cards, accounts } = inMemoryBackend().device("alice");
-  const core = createCore({ clock: { now: () => instant }, cards, accounts });
+  const { cards, accounts, settings } = inMemoryBackend().device("alice");
+  const core = createCore({
+    clock: { now: () => instant },
+    cards,
+    accounts,
+    settings,
+  });
   return { core, setNow: (next: string) => (instant = new Date(next)) };
 }
 
@@ -891,5 +902,350 @@ describe("deleting a Card", () => {
     expect((await core.listCards()).map(({ cue }) => cue)).toEqual(["Kept"]);
     expect(await core.listReviews(card.id)).toEqual([]);
     expect(await core.listReviews(kept.id)).toHaveLength(1);
+  });
+});
+
+describe("Quiz questions", () => {
+  const question = (n: number) => ({
+    question: `Question ${n}?`,
+    answer: `Answer ${n}.`,
+  });
+
+  it("starts a Card without Quiz questions", async () => {
+    const { core } = setup();
+
+    const result = await core.createCard({ cue: "A Cue", essence: "An Essence." });
+
+    expect(result).toMatchObject({ ok: true, card: { quizQuestions: [] } });
+  });
+
+  it("keeps up to 3 Quiz questions with their expected answers", async () => {
+    const { core } = setup();
+
+    const result = await core.createCard({
+      cue: "A Cue",
+      essence: "An Essence.",
+      quizQuestions: [question(1), question(2), question(3)],
+    });
+
+    expect(result).toMatchObject({
+      ok: true,
+      card: { quizQuestions: [question(1), question(2), question(3)] },
+    });
+  });
+
+  it("refuses a fourth Quiz question and keeps no Card", async () => {
+    const { core } = setup();
+
+    const result = await core.createCard({
+      cue: "A Cue",
+      essence: "An Essence.",
+      quizQuestions: [question(1), question(2), question(3), question(4)],
+    });
+
+    expect(result).toEqual({ ok: false, problems: ["too-many-quiz-questions"] });
+    expect(await core.listCards()).toEqual([]);
+  });
+
+  it("refuses a Quiz question without its question or its answer", async () => {
+    const { core } = setup();
+
+    const result = await core.createCard({
+      cue: "A Cue",
+      essence: "An Essence.",
+      quizQuestions: [{ question: " ", answer: "" }],
+    });
+
+    expect(result).toEqual({
+      ok: false,
+      problems: ["quiz-question-missing", "quiz-answer-missing"],
+    });
+  });
+
+  it("adds, edits and removes Quiz questions when the Card is edited", async () => {
+    const { core } = setup();
+    const created = await core.createCard({
+      cue: "A Cue",
+      essence: "An Essence.",
+      quizQuestions: [question(1), question(2)],
+    });
+    if (!created.ok) throw new Error("the Card should be valid");
+
+    const edited = await core.editCard(created.card.id, {
+      cue: "A Cue",
+      essence: "An Essence.",
+      quizQuestions: [{ question: "Edited?", answer: "Yes." }, question(3)],
+    });
+
+    expect(edited).toMatchObject({
+      ok: true,
+      card: {
+        quizQuestions: [{ question: "Edited?", answer: "Yes." }, question(3)],
+      },
+    });
+  });
+
+  it("refuses an edit to a fourth Quiz question and keeps the Card as it was", async () => {
+    const { core } = setup();
+    const created = await core.createCard({
+      cue: "A Cue",
+      essence: "An Essence.",
+      quizQuestions: [question(1), question(2), question(3)],
+    });
+    if (!created.ok) throw new Error("the Card should be valid");
+
+    const edited = await core.editCard(created.card.id, {
+      cue: "A Cue",
+      essence: "An Essence.",
+      quizQuestions: [question(1), question(2), question(3), question(4)],
+    });
+
+    expect(edited).toEqual({ ok: false, problems: ["too-many-quiz-questions"] });
+    expect((await core.listCards())[0]?.quizQuestions).toHaveLength(3);
+  });
+});
+
+describe("Quiz mode", () => {
+  const QUESTIONS = [
+    { question: "Question 1?", answer: "Answer 1." },
+    { question: "Question 2?", answer: "Answer 2." },
+    { question: "Question 3?", answer: "Answer 3." },
+  ];
+
+  async function quizCard(
+    core: ReturnType<typeof setup>["core"],
+    quizQuestions = QUESTIONS,
+  ) {
+    const result = await core.createCard({
+      cue: "A Cue",
+      essence: "An Essence.",
+      quizQuestions,
+    });
+    if (!result.ok) throw new Error("the Card should be valid");
+    return core.setQuizMode(result.card.id, true);
+  }
+
+  it("starts a Card in Recall mode", async () => {
+    const { core } = setup();
+
+    const result = await core.createCard({ cue: "A Cue", essence: "An Essence." });
+
+    expect(result).toMatchObject({ ok: true, card: { quizMode: false } });
+  });
+
+  it("turns Quiz mode on and off for one Card", async () => {
+    const { core } = setup();
+    const card = await quizCard(core);
+
+    expect(card.quizMode).toBe(true);
+    expect((await core.listCards())[0]?.quizMode).toBe(true);
+    expect((await core.setQuizMode(card.id, false)).quizMode).toBe(false);
+  });
+
+  it("reviews a Card in Recall mode by its Cue while Quiz mode is off", async () => {
+    const { core } = setup();
+    const result = await core.createCard({
+      cue: "A Cue",
+      essence: "An Essence.",
+      quizQuestions: QUESTIONS,
+    });
+    if (!result.ok) throw new Error("the Card should be valid");
+
+    expect(reviewStyle(result.card)).toEqual({ mode: "recall" });
+  });
+
+  it("asks a Quiz question in Quiz mode", async () => {
+    const { core } = setup();
+    const card = await quizCard(core);
+
+    expect(reviewStyle(card)).toEqual({
+      mode: "quiz",
+      quizQuestion: QUESTIONS[0],
+    });
+  });
+
+  it("falls back to Recall mode when the Card has no Quiz questions", async () => {
+    const { core } = setup();
+    const card = await quizCard(core, []);
+
+    expect(reviewStyle(card)).toEqual({ mode: "recall" });
+  });
+
+  it.each([
+    ["forgot", "again"],
+    ["hard", "hard"],
+    ["good", "good"],
+  ] as const)('records "%s" as %s', async (outcome, grade) => {
+    const { core } = setup();
+    const card = await quizCard(core);
+
+    await core.recordReview({ card, mode: "quiz", outcome, channel: "app" });
+
+    expect(await core.listReviews(card.id)).toEqual([
+      {
+        cardId: card.id,
+        reviewedAt: new Date("2026-01-15T09:00:00.000Z"),
+        grade,
+        channel: "app",
+        mode: "quiz",
+      },
+    ]);
+  });
+
+  it("brings a Card graded Hard back sooner than one graded Good", async () => {
+    const { core } = setup();
+    const card = await quizCard(core);
+    const other = await quizCard(core);
+
+    const hard = await core.recordReview({
+      card,
+      mode: "quiz",
+      outcome: "hard",
+      channel: "app",
+    });
+    const good = await core.recordReview({
+      card: other,
+      mode: "quiz",
+      outcome: "good",
+      channel: "app",
+    });
+
+    expect(hard.dueAt.getTime()).toBeLessThan(good.dueAt.getTime());
+  });
+
+  it("rotates through the Quiz questions across Reviews", async () => {
+    const { core } = setup();
+    let card = await quizCard(core);
+
+    const asked: string[] = [];
+    for (let review = 0; review < 4; review++) {
+      const style = reviewStyle(card);
+      if (style.mode !== "quiz") throw new Error("the Card is in Quiz mode");
+      asked.push(style.quizQuestion.question);
+      await core.recordReview({ card, mode: "quiz", outcome: "good", channel: "app" });
+      [card] = (await core.listCards()) as [typeof card];
+    }
+
+    expect(asked).toEqual([
+      "Question 1?",
+      "Question 2?",
+      "Question 3?",
+      "Question 1?",
+    ]);
+  });
+
+  it("keeps rotating when Quiz questions are removed", async () => {
+    const { core } = setup();
+    let card = await quizCard(core);
+    for (let review = 0; review < 2; review++) {
+      card = await core.recordReview({ card, mode: "quiz", outcome: "good", channel: "app" });
+    }
+
+    const edited = await core.editCard(card.id, {
+      cue: "A Cue",
+      essence: "An Essence.",
+      quizQuestions: QUESTIONS.slice(0, 2),
+    });
+    if (!edited.ok) throw new Error("the edit should be valid");
+
+    expect(reviewStyle(edited.card)).toEqual({
+      mode: "quiz",
+      quizQuestion: QUESTIONS[0],
+    });
+  });
+
+  it("does not move the rotation with a Recall mode Review", async () => {
+    const { core } = setup();
+    const card = await quizCard(core, QUESTIONS.slice(0, 2));
+    const recalled = await core.setQuizMode(card.id, false);
+
+    await core.recordReview({
+      card: recalled,
+      mode: "recall",
+      outcome: "remembered",
+      channel: "app",
+    });
+    const [listed] = await core.listCards();
+    if (!listed) throw new Error("the Card should be listed");
+
+    expect(reviewStyle({ ...listed, quizMode: true })).toEqual({
+      mode: "quiz",
+      quizQuestion: QUESTIONS[0],
+    });
+  });
+});
+
+describe("the setting for new Cards to start in Quiz mode", () => {
+  const CARD = { cue: "A Cue", essence: "An Essence." };
+
+  it("is off by default", async () => {
+    const { core } = setup();
+
+    expect(await core.settings()).toEqual({ newCardsInQuizMode: false });
+  });
+
+  it("starts new Cards in Quiz mode once turned on", async () => {
+    const { core } = setup();
+
+    await core.changeSettings({ newCardsInQuizMode: true });
+    const result = await core.createCard(CARD);
+
+    expect(await core.settings()).toEqual({ newCardsInQuizMode: true });
+    expect(result).toMatchObject({ ok: true, card: { quizMode: true } });
+  });
+
+  it("leaves the Cards that already exist as they are", async () => {
+    const { core } = setup();
+    await core.createCard(CARD);
+
+    await core.changeSettings({ newCardsInQuizMode: true });
+
+    expect((await core.listCards())[0]?.quizMode).toBe(false);
+  });
+
+  it("starts new Cards in Recall mode again once turned off", async () => {
+    const { core } = setup();
+    await core.changeSettings({ newCardsInQuizMode: true });
+
+    await core.changeSettings({ newCardsInQuizMode: false });
+    const result = await core.createCard(CARD);
+
+    expect(result).toMatchObject({ ok: true, card: { quizMode: false } });
+  });
+});
+
+describe("choosing Quiz mode with the Card's content", () => {
+  const CARD = { cue: "A Cue", essence: "An Essence." };
+
+  it("creates a Card in the mode given, whatever the setting", async () => {
+    const { core } = setup();
+    await core.changeSettings({ newCardsInQuizMode: true });
+
+    const result = await core.createCard({ ...CARD, quizMode: false });
+
+    expect(result).toMatchObject({ ok: true, card: { quizMode: false } });
+  });
+
+  it("switches the mode with an edit", async () => {
+    const { core } = setup();
+    const created = await core.createCard(CARD);
+    if (!created.ok) throw new Error("the Card should be valid");
+
+    const edited = await core.editCard(created.card.id, {
+      ...CARD,
+      quizMode: true,
+    });
+
+    expect(edited).toMatchObject({ ok: true, card: { quizMode: true } });
+  });
+
+  it("keeps the mode when an edit leaves it out", async () => {
+    const { core } = setup();
+    const created = await core.createCard({ ...CARD, quizMode: true });
+    if (!created.ok) throw new Error("the Card should be valid");
+
+    const edited = await core.editCard(created.card.id, CARD);
+
+    expect(edited).toMatchObject({ ok: true, card: { quizMode: true } });
   });
 });

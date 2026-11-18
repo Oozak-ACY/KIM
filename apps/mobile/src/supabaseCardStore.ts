@@ -1,14 +1,24 @@
-import type { Card, CardChanges, CardStore, Review, Schedule } from "@kim/core";
+import type {
+  Card,
+  CardChanges,
+  CardStore,
+  QuizQuestion,
+  Review,
+  Schedule,
+} from "@kim/core";
 import { supabase } from "./supabase";
 
 const CARD_COLUMNS =
-  "id, cue, essence, hints, tags, archived, created_at, due_at, fsrs_schedule";
+  "id, cue, essence, hints, quiz_questions, quiz_mode, quiz_turn, tags, archived, created_at, due_at, fsrs_schedule";
 
 type CardRow = {
   id: string;
   cue: string;
   essence: string;
   hints: string;
+  quiz_questions: QuizQuestion[];
+  quiz_mode: boolean;
+  quiz_turn: number;
   tags: string[];
   archived: boolean;
   created_at: string;
@@ -30,6 +40,9 @@ function toCard(row: CardRow): Card {
     cue: row.cue,
     essence: row.essence,
     hints: row.hints,
+    quizQuestions: row.quiz_questions,
+    quizMode: row.quiz_mode,
+    quizTurn: row.quiz_turn,
     tags: row.tags,
     archived: row.archived,
     createdAt: new Date(row.created_at),
@@ -39,11 +52,15 @@ function toCard(row: CardRow): Card {
 }
 
 function toRow(changes: CardChanges): Partial<CardRow> {
-  const { dueAt, schedule, ...same } = changes;
+  const { dueAt, schedule, quizQuestions, quizMode, quizTurn, ...same } =
+    changes;
   return {
     ...same,
     ...(dueAt && { due_at: dueAt.toISOString() }),
     ...(schedule && { fsrs_schedule: schedule }),
+    ...(quizQuestions && { quiz_questions: quizQuestions }),
+    ...(quizMode !== undefined && { quiz_mode: quizMode }),
+    ...(quizTurn !== undefined && { quiz_turn: quizTurn }),
   };
 }
 
@@ -93,6 +110,7 @@ export const supabaseCardStore: CardStore = {
       review_card_id: card.id,
       new_due_at: card.dueAt.toISOString(),
       new_fsrs_schedule: card.schedule,
+      new_quiz_turn: card.quizTurn,
       review_reviewed_at: review.reviewedAt.toISOString(),
       review_grade: review.grade,
       review_channel: review.channel,
