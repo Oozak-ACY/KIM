@@ -4,7 +4,7 @@ import {
   type Settings,
   type SettingsStore,
 } from "@kim/core";
-import { supabase } from "./supabase";
+import type { SupabaseClient } from "@supabase/supabase-js";
 
 type SettingsRow = {
   new_cards_in_quiz_mode: boolean;
@@ -22,7 +22,10 @@ function toSettings(row: SettingsRow | null): Settings {
     ? {
         newCardsInQuizMode: row.new_cards_in_quiz_mode,
         nudgesOn: row.nudges_on,
-        nudgeWindows: row.nudge_windows.map(({ start, end }) => ({ start, end })),
+        nudgeWindows: row.nudge_windows.map(({ start, end }) => ({
+          start,
+          end,
+        })),
         dailyNudgeCap: row.daily_nudge_cap,
         timeZone: row.time_zone,
       }
@@ -45,28 +48,31 @@ function toRow(changes: Partial<Settings>): Partial<SettingsRow> {
   };
 }
 
-export const supabaseSettingsStore: SettingsStore = {
-  async get() {
-    const { data, error } = await supabase
-      .from("settings")
-      .select(COLUMNS)
-      .maybeSingle();
-    if (error) throw error;
-    return toSettings(data);
-  },
+export function supabaseSettingsStore(supabase: SupabaseClient): SettingsStore {
+  const store: SettingsStore = {
+    async get() {
+      const { data, error } = await supabase
+        .from("settings")
+        .select(COLUMNS)
+        .maybeSingle();
+      if (error) throw error;
+      return toSettings(data);
+    },
 
-  async update(changes) {
-    const row = toRow(changes);
-    if (Object.keys(row).length === 0) return supabaseSettingsStore.get();
-    // The Account's row is created on its first change, with the defaults
-    // for the rest. The user id comes from the column default, which the
-    // insert policy checks.
-    const { data, error } = await supabase
-      .from("settings")
-      .upsert(row, { onConflict: "user_id" })
-      .select(COLUMNS)
-      .single();
-    if (error) throw error;
-    return toSettings(data);
-  },
-};
+    async update(changes) {
+      const row = toRow(changes);
+      if (Object.keys(row).length === 0) return store.get();
+      // The Account's row is created on its first change, with the defaults
+      // for the rest. The user id comes from the column default, which the
+      // insert policy checks.
+      const { data, error } = await supabase
+        .from("settings")
+        .upsert(row, { onConflict: "user_id" })
+        .select(COLUMNS)
+        .single();
+      if (error) throw error;
+      return toSettings(data);
+    },
+  };
+  return store;
+}

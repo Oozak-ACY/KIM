@@ -23,6 +23,7 @@ export function inMemoryBackend() {
   const users = new Map<string, StoredAccount>();
   let cards: Owned<Card>[] = [];
   let reviews: Owned<Review>[] = [];
+  let captures: Owned<{ cardId: string; capturedAt: Date }>[] = [];
   const settingsByUser = new Map<string, Settings>();
   let pushTokens: { token: string; userId: string; language: NudgeLanguage }[] =
     [];
@@ -73,6 +74,20 @@ export function inMemoryBackend() {
         const stored = { ...card, id: String(nextId++) };
         cards.push({ ...stored, userId: user.id });
         return stored;
+      },
+      async capture(card) {
+        const stored = await cardStore.add(card);
+        captures.push({
+          cardId: stored.id,
+          capturedAt: card.createdAt,
+          userId: user.id,
+        });
+        return stored;
+      },
+      async listCaptures(since) {
+        return captures
+          .filter(({ userId, capturedAt }) => userId === user.id && capturedAt >= since)
+          .map(({ capturedAt }) => capturedAt);
       },
       async list() {
         return cards.filter(({ userId }) => userId === user.id).map(strip<Card>);
@@ -171,6 +186,7 @@ export function inMemoryBackend() {
         users.delete(deleted);
         cards = cards.filter(({ userId }) => userId !== deleted);
         reviews = reviews.filter(({ userId }) => userId !== deleted);
+        captures = captures.filter(({ userId }) => userId !== deleted);
         settingsByUser.delete(deleted);
         pushTokens = pushTokens.filter(({ userId }) => userId !== deleted);
         user = newUser(true);

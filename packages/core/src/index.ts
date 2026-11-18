@@ -7,6 +7,7 @@ import {
 } from "./scheduling";
 import {
   DEFAULT_NUDGE_SETTINGS,
+  isTimeZone,
   type NudgeLanguage,
   type NudgeSettings,
 } from "./nudges";
@@ -27,6 +28,8 @@ export type Card = {
   /** How many Quiz mode Reviews the Card has had, to rotate its Quiz questions. */
   quizTurn: number;
   tags: string[];
+  /** Where a Captured Card comes from; null for a Card created by hand. */
+  source: Source | null;
   /** Kept and searchable, but never due. */
   archived: boolean;
   /** The user kept reviewing it when KIM proposed archiving it: never proposed again. */
@@ -35,6 +38,9 @@ export type Card = {
   dueAt: Date;
   schedule: Schedule;
 };
+
+/** The assistant and conversation a Card was captured from. */
+export type Source = { assistant: string; conversation: string };
 
 /** A question about a Card with the answer the user expects. */
 export type QuizQuestion = { question: string; answer: string };
@@ -49,8 +55,7 @@ export type ReviewMode = "recall" | "quiz";
 
 /** How a Card is reviewed next, with the Quiz question to ask in Quiz mode. */
 export type ReviewStyle =
-  | { mode: "recall" }
-  | { mode: "quiz"; quizQuestion: QuizQuestion };
+  { mode: "recall" } | { mode: "quiz"; quizQuestion: QuizQuestion };
 export type RecallOutcome = "remembered" | "forgotten";
 /** How the user grades their answer to a Quiz question. */
 export type QuizOutcome = "forgot" | "hard" | "good";
@@ -79,6 +84,10 @@ export type Review = {
 
 export type CardStore = {
   add(card: NewCard): Promise<Card>;
+  /** Adds the Card and records it as a Captured Card, or neither. */
+  capture(card: NewCard): Promise<Card>;
+  /** When the Account's Captured Cards since the instant were captured. */
+  listCaptures(since: Date): Promise<Date[]>;
   list(): Promise<Card[]>;
   /** Changes the given fields of the Card and returns it. */
   update(cardId: string, changes: CardChanges): Promise<Card>;
@@ -129,8 +138,7 @@ export type Clock = {
 export type Account = { id: string; linked: boolean };
 
 export type SignInMethod =
-  | { provider: "google" }
-  | { provider: "email"; email: string };
+  { provider: "google" } | { provider: "email"; email: string };
 
 /**
  * How a sign-in went. "email-sent" means it completes when the user opens
@@ -171,6 +179,11 @@ export const ESSENCE_MAX_CHARACTERS = 280;
 export const ESSENCE_MAX_LINES = 3;
 export const HINTS_MAX_CHARACTERS = 280;
 export const QUIZ_QUESTIONS_MAX = 3;
+/** Long enough for any assistant's name, and a conversation's title or link. */
+export const SOURCE_ASSISTANT_MAX_CHARACTERS = 60;
+export const SOURCE_CONVERSATION_MAX_CHARACTERS = 500;
+/** The free plan's Captured Cards per month, once it is enforced. */
+export const CAPTURES_PER_MONTH_MAX = 3;
 
 const RECALL_GRADES: Record<RecallOutcome, Grade> = {
   remembered: "good",
@@ -215,8 +228,67 @@ export type CardProblem =
   | "quiz-answer-missing";
 
 export type CardResult =
-  | { ok: true; card: Card }
-  | { ok: false; problems: CardProblem[] };
+  { ok: true; card: Card } | { ok: false; problems: CardProblem[] };
+
+/**
+ * A Card as the assistant drafted it in the conversation and the user
+ * confirmed it, with the Tags it suggests and where it comes from.
+ */
+export type CaptureDraft = CardContent & { tags?: string[]; source: Source };
+
+export type CaptureProblem =
+  | CardProblem
+  | "source-assistant-missing"
+  | "source-assistant-too-long"
+  | "source-conversation-missing"
+  | "source-conversation-too-long"
+  /** Captures go to a linked Account only. */
+  | "account-not-linked"
+  /** The month's Captured Cards reached CAPTURES_PER_MONTH_MAX. */
+  | "capture-limit-reached";
+
+export type CaptureResult =
+  { ok: true; card: Card } | { ok: false; problems: CaptureProblem[] };
+
+/** Switches for rules that exist before they apply. */
+export type Features = {
+  /** Refuses Captures past CAPTURES_PER_MONTH_MAX. Off in v1: only counted. */
+  captureLimitEnforced: boolean;
+};
+
+function findSourceProblems({
+  assistant,
+  conversation,
+}: Source): CaptureProblem[] {
+  const problems: CaptureProblem[] = [];
+  if (assistant.trim() === "") problems.push("source-assistant-missing");
+  if (characterCount(assistant) > SOURCE_ASSISTANT_MAX_CHARACTERS) {
+    problems.push("source-assistant-too-long");
+  }
+  if (conversation.trim() === "") problems.push("source-conversation-missing");
+  if (characterCount(conversation) > SOURCE_CONVERSATION_MAX_CHARACTERS) {
+    problems.push("source-conversation-too-long");
+  }
+  return problems;
+}
+
+const DEFAULT_FEATURES: Features = { captureLimitEnforced: false };
+
+/** Covers the user's calendar month, whatever their time zone. */
+const CAPTURE_LOOKBACK_MS = 32 * 24 * 60 * 60 * 1000;
+
+/** The calendar month of the instant in the time zone, UTC when unknown. */
+function localMonth(at: Date, timeZone: string | null): string {
+  const zone = timeZone !== null && isTimeZone(timeZone) ? timeZone : "UTC";
+  const parts = new Intl.DateTimeFormat("en-US", {
+    timeZone: zone,
+    year: "numeric",
+    month: "2-digit",
+  }).formatToParts(at);
+  const part = (type: Intl.DateTimeFormatPartTypes) =>
+    parts.find((candidate) => candidate.type === type)?.value ?? "";
+  return `${part("year")}-${part("month")}`;
+}
 
 function characterCount(text: string): number {
   return [...text].length;
@@ -303,6 +375,10 @@ function uniqueTags(tags: string[]): string[] {
   return [...byKey.values()];
 }
 
+function cleanTags(tags: string[]): string[] {
+  return uniqueTags(tags.map((tag) => tag.trim()).filter((tag) => tag !== ""));
+}
+
 function newestFirst(cards: Card[]): Card[] {
   return [...cards].sort(
     (a, b) => b.createdAt.getTime() - a.createdAt.getTime(),
@@ -354,12 +430,14 @@ export function createCore({
   accounts,
   settings,
   pushTokens,
+  features = DEFAULT_FEATURES,
 }: {
   clock: Clock;
   cards: CardStore;
   accounts: AccountStore;
   settings: SettingsStore;
   pushTokens: PushTokenStore;
+  features?: Features;
 }) {
   /**
    * Runs a step that may switch this device to another account. Cards made
@@ -378,6 +456,36 @@ export function createCore({
     return result;
   }
 
+  /** A new Card from checked content, scheduled for its first Review. */
+  async function newCard(
+    content: Required<CardContent>,
+    quizMode: boolean | undefined,
+    extra: Pick<Card, "tags" | "source">,
+  ): Promise<NewCard> {
+    const now = clock.now();
+    return {
+      ...content,
+      quizMode: quizMode ?? (await settings.get()).newCardsInQuizMode,
+      quizTurn: 0,
+      ...extra,
+      archived: false,
+      archiveProposalDeclined: false,
+      createdAt: now,
+      ...(await firstSchedule(now)),
+    };
+  }
+
+  /** How many Cards the Account captured this calendar month, in its time zone. */
+  async function capturedThisMonth(): Promise<number> {
+    const now = clock.now();
+    const { timeZone } = await settings.get();
+    const month = localMonth(now, timeZone);
+    const captures = await cards.listCaptures(
+      new Date(now.getTime() - CAPTURE_LOOKBACK_MS),
+    );
+    return captures.filter((at) => localMonth(at, timeZone) === month).length;
+  }
+
   return {
     account(): Promise<Account> {
       return accounts.current();
@@ -387,7 +495,8 @@ export function createCore({
       let method = input;
       if (method.provider === "email") {
         const email = method.email.trim();
-        if (!EMAIL_SHAPE.test(email)) return { ok: false, problem: "email-invalid" };
+        if (!EMAIL_SHAPE.test(email))
+          return { ok: false, problem: "email-invalid" };
         method = { provider: "email", email };
       }
 
@@ -396,7 +505,9 @@ export function createCore({
       if (linked !== "taken") return { ok: true, status: linked };
 
       // The identity already has an account, from another device: join it.
-      const signedIn = await keepingAnonymousCards(() => accounts.signIn(method));
+      const signedIn = await keepingAnonymousCards(() =>
+        accounts.signIn(method),
+      );
       return {
         ok: true,
         status: signedIn === "done" ? "signed-in" : signedIn,
@@ -441,19 +552,55 @@ export function createCore({
       const checked = checkContent(input);
       if (!checked.ok) return checked;
 
-      const now = clock.now();
-      const card = await cards.add({
-        ...checked.content,
-        quizMode: quizMode ?? (await settings.get()).newCardsInQuizMode,
-        quizTurn: 0,
-        tags: [],
-        archived: false,
-        archiveProposalDeclined: false,
-        createdAt: now,
-        ...(await firstSchedule(now)),
-      });
+      const card = await cards.add(
+        await newCard(checked.content, quizMode, { tags: [], source: null }),
+      );
       return { ok: true, card };
     },
+
+    /**
+     * Saves the one Card a Capture makes, with its suggested Tags and Source,
+     * and counts it as a Captured Card. Nothing is saved when it is refused.
+     */
+    async captureCard({
+      tags = [],
+      source,
+      ...input
+    }: CaptureDraft): Promise<CaptureResult> {
+      const checked = checkContent(input);
+      const sourceProblems = findSourceProblems(source);
+      if (!checked.ok || sourceProblems.length > 0) {
+        return {
+          ok: false,
+          problems: [
+            ...(checked.ok ? [] : checked.problems),
+            ...sourceProblems,
+          ],
+        };
+      }
+      if (!(await accounts.current()).linked) {
+        return { ok: false, problems: ["account-not-linked"] };
+      }
+      if (
+        features.captureLimitEnforced &&
+        (await capturedThisMonth()) >= CAPTURES_PER_MONTH_MAX
+      ) {
+        return { ok: false, problems: ["capture-limit-reached"] };
+      }
+
+      const card = await cards.capture(
+        await newCard(checked.content, undefined, {
+          tags: cleanTags(tags),
+          source: {
+            assistant: source.assistant,
+            conversation: source.conversation,
+          },
+        }),
+      );
+      return { ok: true, card };
+    },
+
+    capturedThisMonth,
 
     async listCards(): Promise<Card[]> {
       return newestFirst(await cards.list());
@@ -464,8 +611,7 @@ export function createCore({
     },
 
     setTags(cardId: string, tags: string[]): Promise<Card> {
-      const trimmed = tags.map((tag) => tag.trim()).filter((tag) => tag !== "");
-      return cards.update(cardId, { tags: uniqueTags(trimmed) });
+      return cards.update(cardId, { tags: cleanTags(tags) });
     },
 
     /** Changes what the Card says; its schedule and Reviews stay. */
@@ -522,7 +668,10 @@ export function createCore({
       card,
       channel,
       ...answer
-    }: { card: Card; channel: ReviewChannel } & ReviewAnswer): Promise<ReviewedCard> {
+    }: {
+      card: Card;
+      channel: ReviewChannel;
+    } & ReviewAnswer): Promise<ReviewedCard> {
       const reviewedAt = clock.now();
       const grade = gradeOf(answer);
       const archiveProposed =
@@ -550,3 +699,6 @@ export function createCore({
     },
   };
 }
+
+/** What the app and the KIM connector ask of KIM. */
+export type KimCore = ReturnType<typeof createCore>;

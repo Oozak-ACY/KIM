@@ -43,17 +43,16 @@ import {
   phonePushToken,
   phoneTimeZone,
 } from "./src/nudges";
-import { ensureSession } from "./src/supabase";
+import { ensureSession, supabase } from "./src/supabase";
 import { isEmailLink, supabaseAccountStore } from "./src/supabaseAccountStore";
-import { supabaseCardStore } from "./src/supabaseCardStore";
 import { supabasePushTokenStore } from "./src/supabasePushTokenStore";
-import { supabaseSettingsStore } from "./src/supabaseSettingsStore";
+import { supabaseCardStore, supabaseSettingsStore } from "@kim/supabase";
 
 const core = createCore({
   clock: { now: () => new Date() },
-  cards: supabaseCardStore,
+  cards: supabaseCardStore(supabase),
   accounts: supabaseAccountStore,
-  settings: supabaseSettingsStore,
+  settings: supabaseSettingsStore(supabase),
   pushTokens: supabasePushTokenStore,
 });
 
@@ -370,6 +369,9 @@ function CardRow({
       <Text style={styles.cue}>{card.cue}</Text>
       <Text style={styles.essence}>{card.essence}</Text>
       {card.hints !== "" && <Text style={styles.hints}>{card.hints}</Text>}
+      {card.source && (
+        <Text style={styles.due}>{t.capturedFrom(card.source)}</Text>
+      )}
       <Text style={styles.due}>
         {card.archived ? t.archived : due ? t.dueNow : t.nextDue(card.dueAt)}
         {card.quizMode && ` · ${t.quizModeMarker}`}
@@ -495,6 +497,13 @@ function AccountSettings({
   const [busy, setBusy] = useState(false);
   const [notice, setNotice] = useState<string>();
   const [problem, setProblem] = useState<string>();
+  const [captured, setCaptured] = useState<number>();
+
+  useEffect(() => {
+    if (!account.linked) return;
+    // The count is a courtesy: the screen works without it.
+    core.capturedThisMonth().then(setCaptured, () => undefined);
+  }, [account]);
 
   async function run(
     step: () => Promise<{ notice?: string; problem?: string }>,
@@ -559,6 +568,9 @@ function AccountSettings({
       {account.linked ? (
         <>
           <Text style={styles.message}>{t.accountLinked}</Text>
+          {captured !== undefined && (
+            <Text style={styles.message}>{t.capturedThisMonth(captured)}</Text>
+          )}
           <Button
             label={t.deleteAccount}
             onPress={confirmDelete}

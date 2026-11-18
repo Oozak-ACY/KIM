@@ -1,4 +1,4 @@
-import type { CardProblem, QuizOutcome } from "@kim/core";
+import type { CardProblem, QuizOutcome, Source } from "@kim/core";
 import {
   CUE_MAX_CHARACTERS,
   ESSENCE_MAX_CHARACTERS,
@@ -56,6 +56,8 @@ type Messages = {
   problems: Record<CardProblem, string>;
   quizMode: string;
   quizModeMarker: string;
+  capturedFrom: (source: Source) => string;
+  capturedThisMonth: (count: number) => string;
   quizModeNeedsQuestions: string;
   quizQuestionLabel: (number: number) => string;
   quizQuestionPlaceholder: string;
@@ -179,6 +181,10 @@ const en: Messages = {
   },
   quizMode: "Quiz mode",
   quizModeMarker: "Quiz",
+  capturedFrom: ({ assistant, conversation }) =>
+    `Captured from ${assistant}: ${conversation}`,
+  capturedThisMonth: (count) =>
+    `${count} ${count === 1 ? "Card" : "Cards"} captured from your assistants this month.`,
   quizModeNeedsQuestions:
     "Add a Quiz question: until then, this Card is reviewed by its Cue.",
   quizQuestionLabel: (number) => `Quiz question ${number}`,
@@ -308,6 +314,12 @@ const fr: Messages = {
   },
   quizMode: "Mode Quiz",
   quizModeMarker: "Quiz",
+  capturedFrom: ({ assistant, conversation }) =>
+    `Capturée depuis ${assistant} : ${conversation}`,
+  capturedThisMonth: (count) =>
+    count <= 1
+      ? `${count} Carte capturée depuis vos assistants ce mois-ci.`
+      : `${count} Cartes capturées depuis vos assistants ce mois-ci.`,
   quizModeNeedsQuestions:
     "Ajoutez une question de Quiz : d'ici là, cette Carte est révisée par son Repère.",
   quizQuestionLabel: (number) => `Question de Quiz ${number}`,
