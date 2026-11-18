@@ -86,6 +86,8 @@ type Messages = {
   deleteAccountWarning: string;
   accountDeleted: string;
   deleteFailed: string;
+  nudgeChannel: string;
+  nudgeCardGone: string;
 };
 
 const DUE_DATE_FORMAT = { dateStyle: "medium", timeStyle: "short" } as const;
@@ -194,6 +196,8 @@ const en: Messages = {
     "This permanently deletes your account with all your Cards, Reviews and settings, on every device. It cannot be undone.",
   accountDeleted: "Your account and all its data are deleted.",
   deleteFailed: "The account could not be deleted. Check your connection and try again.",
+  nudgeChannel: "Nudges",
+  nudgeCardGone: "This Card is no longer due for now.",
 };
 
 const fr: Messages = {
@@ -300,6 +304,8 @@ const fr: Messages = {
     "Votre compte sera supprimé définitivement avec toutes vos Cartes, Révisions et réglages, sur tous vos appareils. C'est irréversible.",
   accountDeleted: "Votre compte et toutes ses données sont supprimés.",
   deleteFailed: "Impossible de supprimer le compte. Vérifiez votre connexion et réessayez.",
+  nudgeChannel: "Nudges",
+  nudgeCardGone: "Cette Carte n'est plus à réviser pour l'instant.",
 };
 
 const messages: Record<string, Messages> = { en, fr };

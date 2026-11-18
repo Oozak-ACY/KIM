@@ -3,6 +3,8 @@ import {
   type AccountStore,
   type Card,
   type CardStore,
+  type NudgeLanguage,
+  type PushTokenStore,
   type Review,
   type Settings,
   type SettingsStore,
@@ -22,6 +24,8 @@ export function inMemoryBackend() {
   let cards: Owned<Card>[] = [];
   let reviews: Owned<Review>[] = [];
   const settingsByUser = new Map<string, Settings>();
+  let pushTokens: { token: string; userId: string; language: NudgeLanguage }[] =
+    [];
   let nextId = 1;
 
   function newUser(anonymous: boolean): StoredAccount {
@@ -121,6 +125,15 @@ export function inMemoryBackend() {
       },
     };
 
+    const pushTokenStore: PushTokenStore = {
+      async register(token, language) {
+        pushTokens = [
+          ...pushTokens.filter((stored) => stored.token !== token),
+          { token, userId: user.id, language },
+        ];
+      },
+    };
+
     const accounts: AccountStore = {
       async current() {
         return { id: user.id, linked: !user.anonymous };
@@ -159,6 +172,7 @@ export function inMemoryBackend() {
         cards = cards.filter(({ userId }) => userId !== deleted);
         reviews = reviews.filter(({ userId }) => userId !== deleted);
         settingsByUser.delete(deleted);
+        pushTokens = pushTokens.filter(({ userId }) => userId !== deleted);
         user = newUser(true);
       },
     };
@@ -167,6 +181,7 @@ export function inMemoryBackend() {
       cards: cardStore,
       accounts,
       settings,
+      pushTokens: pushTokenStore,
       /** The last link emailed from this device, for the test to open. */
       lastEmailLink() {
         if (!lastEmailLink) throw new Error("No email link was sent");
@@ -175,5 +190,11 @@ export function inMemoryBackend() {
     };
   }
 
-  return { device };
+  return {
+    device,
+    /** The phones registered for Nudges, across all users. */
+    pushTokens() {
+      return pushTokens.map((stored) => ({ ...stored }));
+    },
+  };
 }

@@ -395,6 +395,11 @@ deno_version = 2
 # [edge_runtime.secrets]
 # secret_key = "env(SECRET_VALUE)"
 
+# The Nudge job is called by pg_cron with a secret key, not a user's JWT;
+# the function checks that key itself.
+[functions.send-nudges]
+verify_jwt = false
+
 [analytics]
 enabled = true
 port = 54327

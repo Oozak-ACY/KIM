@@ -4,8 +4,10 @@ import {
   type Grade,
   type Schedule,
 } from "./scheduling";
+import type { NudgeLanguage } from "./nudges";
 
 export type { Grade, Schedule };
+export * from "./nudges";
 
 export type Card = {
   id: string;
@@ -88,6 +90,16 @@ export type SettingsStore = {
   get(): Promise<Settings>;
   /** Changes the given Settings and returns them all. */
   update(changes: Partial<Settings>): Promise<Settings>;
+};
+
+/** Where Nudges for the current Account are sent: the push token of each phone. */
+export type PushTokenStore = {
+  /**
+   * Sends the current Account's Nudges to this phone, written in the given
+   * language. A token belongs to one Account at a time: registering it moves
+   * it from any other.
+   */
+  register(token: string, language: NudgeLanguage): Promise<void>;
 };
 
 export type Clock = {
@@ -322,11 +334,13 @@ export function createCore({
   cards,
   accounts,
   settings,
+  pushTokens,
 }: {
   clock: Clock;
   cards: CardStore;
   accounts: AccountStore;
   settings: SettingsStore;
+  pushTokens: PushTokenStore;
 }) {
   /**
    * Runs a step that may switch this device to another account. Cards made
@@ -372,6 +386,19 @@ export function createCore({
 
     completeEmailLink(link: string): Promise<boolean> {
       return keepingAnonymousCards(() => accounts.completeEmailLink(link));
+    },
+
+    /**
+     * Has this phone receive the Account's Nudges. Only a linked Account gets
+     * Nudges, so an anonymous one registers nothing and gets false.
+     */
+    async registerForNudges(
+      token: string,
+      language: NudgeLanguage,
+    ): Promise<boolean> {
+      if (!(await accounts.current()).linked) return false;
+      await pushTokens.register(token, language);
+      return true;
     },
 
     deleteAccount(): Promise<void> {

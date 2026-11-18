@@ -17,6 +17,7 @@ import {
 import { SafeAreaProvider, SafeAreaView } from "react-native-safe-area-context";
 import { StatusBar } from "expo-status-bar";
 import { useLinkingURL } from "expo-linking";
+import * as Notifications from "expo-notifications";
 import {
   createCore,
   essenceRoom,
@@ -33,9 +34,11 @@ import {
   type SignInMethod,
 } from "@kim/core";
 import { t } from "./src/i18n";
+import { nudgedCardId, phoneLanguage, phonePushToken } from "./src/nudges";
 import { ensureSession } from "./src/supabase";
 import { isEmailLink, supabaseAccountStore } from "./src/supabaseAccountStore";
 import { supabaseCardStore } from "./src/supabaseCardStore";
+import { supabasePushTokenStore } from "./src/supabasePushTokenStore";
 import { supabaseSettingsStore } from "./src/supabaseSettingsStore";
 
 const core = createCore({
@@ -43,6 +46,7 @@ const core = createCore({
   cards: supabaseCardStore,
   accounts: supabaseAccountStore,
   settings: supabaseSettingsStore,
+  pushTokens: supabasePushTokenStore,
 });
 
 export default function App() {
@@ -75,6 +79,8 @@ function Cards() {
   const [changingSettings, setChangingSettings] = useState(false);
   const [searchText, setSearchText] = useState("");
   const [selectedTag, setSelectedTag] = useState<string>();
+  const [nudgedCard, setNudgedCard] = useState<Card>();
+  const [nudgedCardGone, setNudgedCardGone] = useState(false);
 
   const load = useCallback(async () => {
     setLoadFailed(false);
@@ -116,15 +122,50 @@ function Cards() {
       .catch(() => setEmailLinkFailed(true));
   }, [link, load]);
 
+  // Nudges need a linked Account: once it is one, ask to notify and register
+  // this phone. A failed attempt is tried again at the next load.
+  const registeredFor = useRef<string>(undefined);
+  useEffect(() => {
+    if (!account?.linked || registeredFor.current === account.id) return;
+    registeredFor.current = account.id;
+    (async () => {
+      const token = await phonePushToken();
+      if (token) await core.registerForNudges(token, phoneLanguage());
+    })().catch(() => {
+      registeredFor.current = undefined;
+    });
+  }, [account]);
+
+  // Tapping a Nudge, even one that launched the app, opens that Card's
+  // Review, as long as the Card is still due.
+  const nudgeResponse = Notifications.useLastNotificationResponse();
+  const openedNudges = useRef(new Set<string>());
+  useEffect(() => {
+    if (!nudgeResponse) return;
+    const cardId = nudgedCardId(nudgeResponse);
+    const nudge = nudgeResponse.notification.request.identifier;
+    if (!cardId || openedNudges.current.has(nudge)) return;
+    openedNudges.current.add(nudge);
+    Notifications.clearLastNotificationResponse();
+    setNudgedCardGone(false);
+    (async () => {
+      await ensureSession();
+      const card = (await core.dueCards()).find(({ id }) => id === cardId);
+      if (card) setNudgedCard(card);
+      else setNudgedCardGone(true);
+    })().catch(() => setNudgedCardGone(true));
+  }, [nudgeResponse]);
+
   // Cards come due while the app sits in the background. Left alone during a
   // Review, whose list of Cards must not move under the user.
+  const inReview = reviewing || nudgedCard !== undefined;
   useEffect(() => {
-    if (reviewing) return;
+    if (inReview) return;
     const subscription = AppState.addEventListener("change", (state) => {
       if (state === "active") void load();
     });
     return () => subscription.remove();
-  }, [load, reviewing]);
+  }, [load, inReview]);
 
   if (loadFailed) {
     return (
@@ -140,6 +181,18 @@ function Cards() {
       <View style={styles.centered}>
         <ActivityIndicator />
       </View>
+    );
+  }
+
+  if (nudgedCard) {
+    return (
+      <Reviews
+        cards={[nudgedCard]}
+        onDone={() => {
+          setNudgedCard(undefined);
+          void load();
+        }}
+      />
     );
   }
 
@@ -212,6 +265,9 @@ function Cards() {
       </View>
       {emailLinkFailed && (
         <Text style={styles.problem}>{t.emailLinkFailed}</Text>
+      )}
+      {nudgedCardGone && (
+        <Text style={styles.message}>{t.nudgeCardGone}</Text>
       )}
       {dueCards.length > 0 && (
         <Button

@@ -10,12 +10,14 @@ import { inMemoryBackend } from "./testing/inMemoryBackend";
 
 function setup(now = "2026-01-15T09:00:00.000Z") {
   let instant = new Date(now);
-  const { cards, accounts, settings } = inMemoryBackend().device("alice");
+  const { cards, accounts, settings, pushTokens } =
+    inMemoryBackend().device("alice");
   const core = createCore({
     clock: { now: () => instant },
     cards,
     accounts,
     settings,
+    pushTokens,
   });
   return { core, setNow: (next: string) => (instant = new Date(next)) };
 }

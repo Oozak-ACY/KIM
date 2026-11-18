@@ -14,6 +14,7 @@ function setup() {
         cards: connection.cards,
         accounts: connection.accounts,
         settings: connection.settings,
+        pushTokens: connection.pushTokens,
       }),
     };
   };
