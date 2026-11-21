@@ -85,7 +85,8 @@ $("approve").textContent = t.approve;
 $("deny").textContent = t.deny;
 
 const authorizationId = new URLSearchParams(location.search).get("authorization_id");
-const supabase = window.supabase.createClient(config.supabaseUrl, config.supabaseKey, {
+// Not "supabase": the library already owns that global name.
+const kim = window.supabase.createClient(config.supabaseUrl, config.supabaseKey, {
   auth: { flowType: "pkce", detectSessionInUrl: true },
 });
 // Back on this page with authorization_id once signed in.
@@ -95,10 +96,10 @@ function showSignIn() {
   say(t.signIn);
   $("sign-in").hidden = false;
   $("google").onclick = () =>
-    supabase.auth.signInWithOAuth({ provider: "google", options: { redirectTo: here } });
+    kim.auth.signInWithOAuth({ provider: "google", options: { redirectTo: here } });
   $("email-form").onsubmit = async (event) => {
     event.preventDefault();
-    const { error } = await supabase.auth.signInWithOtp({
+    const { error } = await kim.auth.signInWithOtp({
       email: $("email").value.trim(),
       options: { shouldCreateUser: false, emailRedirectTo: here },
     });
@@ -107,7 +108,7 @@ function showSignIn() {
 }
 
 async function showConsent() {
-  const { data, error } = await supabase.auth.oauth.getAuthorizationDetails(authorizationId);
+  const { data, error } = await kim.auth.oauth.getAuthorizationDetails(authorizationId);
   if (error || !data) return say(t.failed);
   if (!("authorization_id" in data)) return location.assign(data.redirect_url);
   say(t.asks(data.client.name));
@@ -117,13 +118,13 @@ async function showConsent() {
     const { error } = await choose(authorizationId);
     if (error) say(t.failed);
   };
-  $("approve").onclick = () => decide((id) => supabase.auth.oauth.approveAuthorization(id));
-  $("deny").onclick = () => decide((id) => supabase.auth.oauth.denyAuthorization(id));
+  $("approve").onclick = () => decide((id) => kim.auth.oauth.approveAuthorization(id));
+  $("deny").onclick = () => decide((id) => kim.auth.oauth.denyAuthorization(id));
 }
 
 (async () => {
   if (!authorizationId) return say(t.failed);
-  const { data } = await supabase.auth.getUser();
+  const { data } = await kim.auth.getUser();
   // Only a linked Account may connect an assistant.
   if (!data.user || data.user.is_anonymous) return showSignIn();
   await showConsent();
