@@ -1,6 +1,11 @@
 import { Client } from "@modelcontextprotocol/sdk/client/index.js";
 import { InMemoryTransport } from "@modelcontextprotocol/sdk/inMemory.js";
-import { createCore } from "@kim/core";
+import {
+  DEFAULT_SETTINGS,
+  createCore,
+  planNudges,
+  type Card,
+} from "@kim/core";
 import { inMemoryBackend } from "@kim/core/src/testing/inMemoryBackend";
 import { describe, expect, it } from "vitest";
 import { SEARCH_RESULTS_MAX, createKimMcpServer } from "./server";
@@ -32,7 +37,10 @@ async function setup({
   const advanceMinutes = (minutes: number) => {
     now = new Date(now.getTime() + minutes * 60_000);
   };
-  return { core, client, advanceMinutes };
+  const setNow = (next: Date) => {
+    now = next;
+  };
+  return { core, client, advanceMinutes, setNow, now: () => now };
 }
 
 const CAPTURE = {
@@ -284,5 +292,341 @@ describe("search_cards", () => {
     for (const result of [byText, byTag, everything]) {
       expect(text(result)).not.toContain(CAPTURE.cue);
     }
+  });
+});
+
+type Context = Awaited<ReturnType<typeof setup>>;
+
+/** Captures a Card and moves the clock to its first due date. */
+async function dueCard(
+  context: Context,
+  capture: Record<string, unknown> = CAPTURE,
+): Promise<Card> {
+  await context.client.callTool({ name: "capture_card", arguments: capture });
+  const [card] = await context.core.listCards();
+  context.setNow(card!.dueAt);
+  return card!;
+}
+
+describe("list_due_cards", () => {
+  it("tells the assistant to bring up due Cards only when the user asks", async () => {
+    const { client } = await setup();
+
+    const { tools } = await client.listTools();
+    const tool = tools.find(({ name }) => name === "list_due_cards");
+
+    expect(tool?.description).toMatch(/only when the user asks/i);
+    expect(tool?.annotations?.readOnlyHint).toBe(true);
+  });
+
+  it("returns a due Card with its id, Cue, Essence, Hints and Quiz questions", async () => {
+    const context = await setup();
+    const card = await dueCard(context);
+
+    const result = await context.client.callTool({
+      name: "list_due_cards",
+      arguments: {},
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(text(result)).toContain(card.id);
+    expect(text(result)).toContain(CAPTURE.cue);
+    expect(text(result)).toContain(CAPTURE.essence);
+    expect(text(result)).toContain(CAPTURE.hints);
+    expect(text(result)).toContain("What merges in fusion?");
+    expect(text(result)).toContain("Light nuclei");
+    expect(text(result)).toMatch(/Recall mode/);
+  });
+
+  it("says which Quiz question to ask for a Card in Quiz mode", async () => {
+    const context = await setup();
+    const card = await dueCard(context);
+    await context.core.setQuizMode(card.id, true);
+
+    const result = await context.client.callTool({
+      name: "list_due_cards",
+      arguments: {},
+    });
+
+    expect(text(result)).toMatch(/Quiz mode.*What merges in fusion\?/s);
+  });
+
+  it("leaves out Cards not yet due and Archived Cards", async () => {
+    const context = await setup();
+    const archived = await dueCard(context);
+    await context.core.archiveCard(archived.id);
+    context.advanceMinutes(1);
+    const reviewed = await dueCard(context, {
+      ...CAPTURE,
+      cue: "What is a black hole?",
+    });
+    await context.core.recordReview({
+      card: reviewed,
+      channel: "app",
+      mode: "recall",
+      outcome: "remembered",
+    });
+
+    const result = await context.client.callTool({
+      name: "list_due_cards",
+      arguments: {},
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(text(result)).toMatch(/no Card due/i);
+    expect(text(result)).not.toContain(CAPTURE.cue);
+    expect(text(result)).not.toContain("black hole");
+  });
+
+  it("never returns another user's due Cards", async () => {
+    const backend = inMemoryBackend();
+    const bob = await setup({ backend, person: "bob" });
+    const card = await dueCard(bob);
+    const alice = await setup({ backend, person: "alice" });
+    alice.setNow(card.dueAt);
+
+    const result = await alice.client.callTool({
+      name: "list_due_cards",
+      arguments: {},
+    });
+
+    expect(text(result)).not.toContain(CAPTURE.cue);
+  });
+});
+
+describe("record_review", () => {
+  it("tells the assistant to record only a grade the user stated or confirmed", async () => {
+    const { client } = await setup();
+
+    const { tools } = await client.listTools();
+    const tool = tools.find(({ name }) => name === "record_review");
+
+    expect(tool?.description).toMatch(/stated or confirmed/i);
+    expect(tool?.description).toMatch(/Essence/);
+    expect(tool?.description).toContain("list_due_cards");
+  });
+
+  it("moves a due Card's next due date, and the Card leaves the due list", async () => {
+    const context = await setup();
+    const card = await dueCard(context);
+
+    const result = await context.client.callTool({
+      name: "record_review",
+      arguments: { cardId: card.id, outcome: "remembered" },
+    });
+
+    expect(result.isError).toBeFalsy();
+    const [reviewed] = await context.core.listCards();
+    expect(reviewed!.dueAt.getTime()).toBeGreaterThan(card.dueAt.getTime());
+    expect(text(result)).toContain(reviewed!.dueAt.toISOString());
+    const due = await context.client.callTool({
+      name: "list_due_cards",
+      arguments: {},
+    });
+    expect(text(due)).not.toContain(CAPTURE.cue);
+  });
+
+  it("records a Recall outcome as a chat Review", async () => {
+    const context = await setup();
+    const card = await dueCard(context);
+
+    await context.client.callTool({
+      name: "record_review",
+      arguments: { cardId: card.id, outcome: "forgotten" },
+    });
+
+    expect(await context.core.listReviews(card.id)).toMatchObject([
+      { channel: "chat", mode: "recall", grade: "again" },
+    ]);
+  });
+
+  it.each([
+    ["forgot", "again"],
+    ["hard", "hard"],
+    ["good", "good"],
+  ] as const)(
+    "records the Quiz grade %s as a chat Quiz mode Review",
+    async (outcome, grade) => {
+      const context = await setup();
+      const card = await dueCard(context);
+      await context.core.setQuizMode(card.id, true);
+
+      await context.client.callTool({
+        name: "record_review",
+        arguments: { cardId: card.id, outcome },
+      });
+
+      expect(await context.core.listReviews(card.id)).toMatchObject([
+        { channel: "chat", mode: "quiz", grade },
+      ]);
+      const [reviewed] = await context.core.listCards();
+      expect(reviewed!.quizTurn).toBe(1);
+    },
+  );
+
+  it("refuses a Recall outcome for a Card reviewed in Quiz mode", async () => {
+    const context = await setup();
+    const card = await dueCard(context);
+    await context.core.setQuizMode(card.id, true);
+
+    const result = await context.client.callTool({
+      name: "record_review",
+      arguments: { cardId: card.id, outcome: "remembered" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(text(result)).toMatch(/Quiz mode.*forgot.*hard.*good/);
+    expect(await context.core.listReviews(card.id)).toEqual([]);
+  });
+
+  it("refuses a Card that is no longer due, so a Review is recorded once", async () => {
+    const context = await setup();
+    const card = await dueCard(context);
+    await context.client.callTool({
+      name: "record_review",
+      arguments: { cardId: card.id, outcome: "remembered" },
+    });
+
+    const again = await context.client.callTool({
+      name: "record_review",
+      arguments: { cardId: card.id, outcome: "remembered" },
+    });
+
+    expect(again.isError).toBe(true);
+    expect(text(again)).toMatch(/not due until/i);
+    expect(await context.core.listReviews(card.id)).toHaveLength(1);
+  });
+
+  it("refuses another user's Card", async () => {
+    const backend = inMemoryBackend();
+    const bob = await setup({ backend, person: "bob" });
+    const card = await dueCard(bob);
+    const alice = await setup({ backend, person: "alice" });
+    alice.setNow(card.dueAt);
+
+    const result = await alice.client.callTool({
+      name: "record_review",
+      arguments: { cardId: card.id, outcome: "remembered" },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(await bob.core.listReviews(card.id)).toEqual([]);
+  });
+
+  it("takes the Card out of the next Nudge plan", async () => {
+    const context = await setup();
+    const card = await dueCard(context);
+    const plan = async () =>
+      planNudges({
+        linked: true,
+        settings: {
+          ...DEFAULT_SETTINGS,
+          nudgesOn: true,
+          timeZone: "UTC",
+          nudgeWindows: [{ start: 0, end: 24 * 60 }],
+        },
+        cards: await context.core.listCards(),
+        sent: [],
+        now: context.now(),
+      });
+    expect(await plan()).not.toEqual([]);
+
+    await context.client.callTool({
+      name: "record_review",
+      arguments: { cardId: card.id, outcome: "remembered" },
+    });
+
+    expect(await plan()).toEqual([]);
+  });
+});
+
+/** Remembers the Card in chat on each due date until KIM proposes archiving it. */
+async function reviewUntilArchiveProposal(
+  context: Context,
+  card: Card,
+): Promise<string> {
+  for (let review = 0; review < 50; review++) {
+    const [current] = await context.core.listCards();
+    context.setNow(current!.dueAt);
+    const result = await context.client.callTool({
+      name: "record_review",
+      arguments: { cardId: card.id, outcome: "remembered" },
+    });
+    if (/archiv/i.test(text(result))) return text(result);
+  }
+  throw new Error("KIM never proposed archiving the Card");
+}
+
+describe("the archive proposal in chat", () => {
+  it("is returned by record_review, naming the tool that answers it", async () => {
+    const context = await setup();
+    const card = await dueCard(context);
+
+    const proposal = await reviewUntilArchiveProposal(context, card);
+
+    expect(proposal).toContain("answer_archive_proposal");
+  });
+
+  it("archives the Card when the user accepts it", async () => {
+    const context = await setup();
+    const card = await dueCard(context);
+    await reviewUntilArchiveProposal(context, card);
+
+    const result = await context.client.callTool({
+      name: "answer_archive_proposal",
+      arguments: { cardId: card.id, archive: true },
+    });
+
+    expect(result.isError).toBeFalsy();
+    expect(await context.core.listCards()).toMatchObject([{ archived: true }]);
+  });
+
+  it("keeps the Card scheduled and never proposes again when the user declines", async () => {
+    const context = await setup();
+    const card = await dueCard(context);
+    await reviewUntilArchiveProposal(context, card);
+
+    await context.client.callTool({
+      name: "answer_archive_proposal",
+      arguments: { cardId: card.id, archive: false },
+    });
+
+    expect(await context.core.listCards()).toMatchObject([
+      { archived: false, archiveProposalDeclined: true },
+    ]);
+  });
+
+  it.each([true, false])(
+    "refuses an answer (archive: %s) when KIM made no proposal for the Card",
+    async (archive) => {
+      const context = await setup();
+      const card = await dueCard(context);
+
+      const result = await context.client.callTool({
+        name: "answer_archive_proposal",
+        arguments: { cardId: card.id, archive },
+      });
+
+      expect(result.isError).toBe(true);
+      expect(text(result)).toMatch(/no proposal/i);
+      expect(await context.core.listCards()).toMatchObject([
+        { archived: false, archiveProposalDeclined: false },
+      ]);
+    },
+  );
+
+  it("refuses another user's Card", async () => {
+    const backend = inMemoryBackend();
+    const bob = await setup({ backend, person: "bob" });
+    const card = await dueCard(bob);
+    const alice = await setup({ backend, person: "alice" });
+
+    const result = await alice.client.callTool({
+      name: "answer_archive_proposal",
+      arguments: { cardId: card.id, archive: true },
+    });
+
+    expect(result.isError).toBe(true);
+    expect(await bob.core.listCards()).toMatchObject([{ archived: false }]);
   });
 });

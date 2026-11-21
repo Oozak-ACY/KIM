@@ -10,7 +10,9 @@ import {
   QUIZ_QUESTIONS_MAX,
   SOURCE_ASSISTANT_MAX_CHARACTERS,
   SOURCE_CONVERSATION_MAX_CHARACTERS,
+  archiveProposalOpen,
   essenceRoom,
+  reviewStyle,
   type Card,
   type CaptureDraft,
   type CaptureProblem,
@@ -123,6 +125,93 @@ function searchReport(found: Card[]): string {
   return [header, ...shown.map(describeCard)].join("\n\n");
 }
 
+const LIST_DUE_CARDS_DESCRIPTION = `List the user's KIM Cards that are due for a Review now, the longest due first, so you can run a Chat Review with them in this conversation.
+
+Use it only when the user asks to review, for instance "anything to reinforce?" or "quiz me on my KIM Cards". Never bring up due Cards on your own.
+
+Each Card comes with its id, Cue, Essence, Hints, Quiz questions and how to review it. Then, one Card at a time, follow record_review's steps.`;
+
+const RECORD_REVIEW_DESCRIPTION = `Record the outcome of a Chat Review of one due Card from list_due_cards. It counts exactly like a Review in the KIM app: it schedules the Card's next Review.
+
+Use it only when the user asks to review their Cards. For each Card:
+1. In Recall mode, show the Cue and let the user try to remember. In Quiz mode, ask the Quiz question given by list_due_cards and let the user answer.
+2. Reveal the Essence (and the expected answer in Quiz mode), with the Hints if they help.
+3. Ask the user to grade themselves: in Recall mode, remembered or forgotten; in Quiz mode, Forgot, Hard or Good. You may suggest a grade, but the user decides.
+4. Call this tool only once the user has stated or confirmed their grade, and only once per Card.
+
+If the result proposes archiving the Card, ask the user whether to archive it, and give their answer to answer_archive_proposal.`;
+
+const ANSWER_ARCHIVE_PROPOSAL_DESCRIPTION = `Give the user's answer to KIM's proposal to archive a Card, made by record_review once the user remembered the Card after a six month interval.
+
+Use it only once the user has answered the proposal. Archived, the Card stays kept and searchable but no longer gets Nudges. Declined, the Card stays scheduled and KIM never proposes archiving it again.`;
+
+const RECALL_OUTCOMES = ["remembered", "forgotten"] as const;
+const QUIZ_OUTCOMES = ["forgot", "hard", "good"] as const;
+
+function isRecallOutcome(
+  outcome: string,
+): outcome is (typeof RECALL_OUTCOMES)[number] {
+  return (RECALL_OUTCOMES as readonly string[]).includes(outcome);
+}
+
+const recordReviewInput = {
+  cardId: z.string().describe("The Card's id, as given by list_due_cards."),
+  outcome: z
+    .enum([...RECALL_OUTCOMES, ...QUIZ_OUTCOMES])
+    .describe(
+      'The grade the user stated or confirmed: "remembered" or "forgotten" in Recall mode; "forgot", "hard" or "good" in Quiz mode.',
+    ),
+};
+
+const answerArchiveProposalInput = {
+  cardId: z.string().describe("The Card's id."),
+  archive: z
+    .boolean()
+    .describe(
+      "True when the user wants the Card archived, false when they want to keep reviewing it.",
+    ),
+};
+
+function describeDueCard(card: Card): string {
+  const style = reviewStyle(card);
+  const quizQuestions = card.quizQuestions.length
+    ? card.quizQuestions
+        .map(({ question, answer }) => `- ${question} (answer: ${answer})`)
+        .join("\n")
+    : "none";
+  return [
+    `Card id: ${card.id}`,
+    style.mode === "quiz"
+      ? `Review in Quiz mode: ask "${style.quizQuestion.question}" (expected answer: ${style.quizQuestion.answer})`
+      : "Review in Recall mode: show the Cue",
+    `Cue: ${card.cue}`,
+    `Essence: ${card.essence}`,
+    `Hints: ${card.hints || "none"}`,
+    `Quiz questions:\n${quizQuestions}`,
+    `Due since: ${card.dueAt.toISOString()}`,
+  ].join("\n");
+}
+
+function dueReport(due: Card[]): string {
+  if (due.length === 0) {
+    return "The user has no Card due for a Review right now. Tell them they are up to date.";
+  }
+  const header =
+    due.length === 1 ? "1 Card is due." : `${due.length} Cards are due.`;
+  return [header, ...due.map(describeDueCard)].join("\n\n");
+}
+
+function errorResult(text: string) {
+  return { isError: true, content: [{ type: "text" as const, text }] };
+}
+
+function textResult(text: string) {
+  return { content: [{ type: "text" as const, text }] };
+}
+
+const UNKNOWN_CARD =
+  "The user has no Card with this id. Use the id given by list_due_cards.";
+
 function characters(text: string | undefined): number {
   return [...(text ?? "")].length;
 }
@@ -219,6 +308,92 @@ export function createKimMcpServer(core: KimCore): McpServer {
     async (search) => {
       const found = await core.searchCards(search);
       return { content: [{ type: "text", text: searchReport(found) }] };
+    },
+  );
+
+  server.registerTool(
+    "list_due_cards",
+    {
+      title: "List the user's due KIM Cards",
+      description: LIST_DUE_CARDS_DESCRIPTION,
+      inputSchema: {},
+      annotations: { readOnlyHint: true },
+    },
+    async () => textResult(dueReport(await core.dueCards())),
+  );
+
+  server.registerTool(
+    "record_review",
+    {
+      title: "Record a Chat Review in KIM",
+      description: RECORD_REVIEW_DESCRIPTION,
+      inputSchema: recordReviewInput,
+      annotations: { destructiveHint: false, idempotentHint: false },
+    },
+    async ({ cardId, outcome }) => {
+      const card = (await core.dueCards()).find(({ id }) => id === cardId);
+      if (!card) {
+        const known = (await core.listCards()).find(({ id }) => id === cardId);
+        if (!known) return errorResult(UNKNOWN_CARD);
+        return errorResult(
+          known.archived
+            ? `"${known.cue}" is Archived, so it is not reviewed. Nothing was recorded.`
+            : `"${known.cue}" is not due until ${known.dueAt.toISOString()}. Nothing was recorded.`,
+        );
+      }
+
+      const { mode } = reviewStyle(card);
+      const answer = isRecallOutcome(outcome)
+        ? ({ mode: "recall", outcome } as const)
+        : ({ mode: "quiz", outcome } as const);
+      if (answer.mode !== mode) {
+        return errorResult(
+          mode === "quiz"
+            ? `"${card.cue}" is reviewed in Quiz mode: grade it "forgot", "hard" or "good". Nothing was recorded.`
+            : `"${card.cue}" is reviewed in Recall mode: grade it "remembered" or "forgotten". Nothing was recorded.`,
+        );
+      }
+
+      const reviewed = await core.recordReview({
+        card,
+        channel: "chat",
+        ...answer,
+      });
+      const recorded = `Recorded. KIM will bring "${card.cue}" back for its next Review on ${reviewed.dueAt.toISOString()}.`;
+      return textResult(
+        reviewed.archiveProposed
+          ? `${recorded}\nThe user remembered this Card after a six month interval, so KIM proposes archiving it: it would stay kept and searchable, but no longer get Nudges. Ask the user whether to archive it, and give their answer to answer_archive_proposal.`
+          : recorded,
+      );
+    },
+  );
+
+  server.registerTool(
+    "answer_archive_proposal",
+    {
+      title: "Answer KIM's proposal to archive a Card",
+      description: ANSWER_ARCHIVE_PROPOSAL_DESCRIPTION,
+      inputSchema: answerArchiveProposalInput,
+      annotations: { destructiveHint: false, idempotentHint: true },
+    },
+    async ({ cardId, archive }) => {
+      const card = (await core.listCards()).find(({ id }) => id === cardId);
+      if (!card) return errorResult(UNKNOWN_CARD);
+      if (!archiveProposalOpen(card)) {
+        return errorResult(
+          `KIM made no proposal to archive "${card.cue}", so there is nothing to answer. Nothing was changed.`,
+        );
+      }
+      if (archive) {
+        await core.archiveCard(cardId);
+        return textResult(
+          `"${card.cue}" is Archived. It stays kept and searchable, and no longer gets Nudges.`,
+        );
+      }
+      await core.declineArchiveProposal(cardId);
+      return textResult(
+        `"${card.cue}" stays scheduled, and KIM will not propose archiving it again.`,
+      );
     },
   );
 

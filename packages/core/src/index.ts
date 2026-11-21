@@ -50,7 +50,8 @@ export type NewCard = Omit<Card, "id">;
 /** Fields of a Card a store changes in place; the others are left alone. */
 export type CardChanges = Partial<Omit<Card, "id" | "createdAt">>;
 
-export type ReviewChannel = "app";
+/** Where a Review happened: in the app, or as a Chat Review through the connector. */
+export type ReviewChannel = "app" | "chat";
 export type ReviewMode = "recall" | "quiz";
 
 /** How a Card is reviewed next, with the Quiz question to ask in Quiz mode. */
@@ -416,6 +417,19 @@ export function tagsInUse(cards: Pick<Card, "tags">[]): string[] {
  * Quiz mode asks the Card's Quiz questions in turn. A Card in Quiz mode
  * with no Quiz questions is reviewed in Recall mode.
  */
+/**
+ * Whether KIM's proposal to archive the Card awaits the user's answer. The
+ * Review that makes it schedules the Card at least as far ahead, so the
+ * proposal stays open until the user archives the Card or declines.
+ */
+export function archiveProposalOpen(card: Card): boolean {
+  return (
+    !card.archived &&
+    !card.archiveProposalDeclined &&
+    scheduledIntervalDays(card) >= ARCHIVE_PROPOSAL_INTERVAL_DAYS
+  );
+}
+
 export function reviewStyle(card: Card): ReviewStyle {
   const { quizQuestions, quizTurn } = card;
   const quizQuestion = quizQuestions[quizTurn % quizQuestions.length];
