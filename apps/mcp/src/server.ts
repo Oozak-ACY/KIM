@@ -11,6 +11,7 @@ import {
   SOURCE_ASSISTANT_MAX_CHARACTERS,
   SOURCE_CONVERSATION_MAX_CHARACTERS,
   essenceRoom,
+  type Card,
   type CaptureDraft,
   type CaptureProblem,
   type KimCore,
@@ -21,10 +22,11 @@ import { z } from "zod";
 const CAPTURE_CARD_DESCRIPTION = `Save one Card to the user's KIM, the app that reminds them of what they learned just before they would forget it.
 
 Use it only when the user asks to send, save or keep something in KIM. Then:
-1. Condense the conversation into its single key idea: one Card per Capture, never several. If the user wants to keep more than one idea, ask them which one comes first.
-2. Respect the limits: a Cue of at most ${CUE_MAX_CHARACTERS} characters, phrased as a short question or title; an Essence of at most ${ESSENCE_MAX_CHARACTERS} characters and ${ESSENCE_MAX_LINES} lines, the key knowledge re-readable in seconds; optional Hints of at most ${HINTS_MAX_CHARACTERS} characters; up to ${QUIZ_QUESTIONS_MAX} Quiz questions, each with its expected answer.
-3. Write the Card in the language of the conversation.
-4. Show the draft to the user (Cue, Essence, Hints, Tags and Quiz questions) and call this tool only once they explicitly confirm it. If they ask for changes, show the new draft and wait for their confirmation again.`;
+1. Call search_cards first to check whether the user already has a similar Card, and follow its guidance on duplicates.
+2. Condense the conversation into its single key idea: one Card per Capture, never several. If the user wants to keep more than one idea, ask them which one comes first.
+3. Respect the limits: a Cue of at most ${CUE_MAX_CHARACTERS} characters, phrased as a short question or title; an Essence of at most ${ESSENCE_MAX_CHARACTERS} characters and ${ESSENCE_MAX_LINES} lines, the key knowledge re-readable in seconds; optional Hints of at most ${HINTS_MAX_CHARACTERS} characters; up to ${QUIZ_QUESTIONS_MAX} Quiz questions, each with its expected answer.
+4. Write the Card in the language of the conversation.
+5. Show the draft to the user (Cue, Essence, Hints, Tags and Quiz questions) and call this tool only once they explicitly confirm it. If they ask for changes, show the new draft and wait for their confirmation again.`;
 
 const captureCardInput = {
   cue: z
@@ -73,6 +75,53 @@ const captureCardInput = {
     })
     .describe("Where the Card comes from, shown with it in the app."),
 };
+
+const SEARCH_CARDS_DESCRIPTION = `Search the user's KIM Cards by text and by Tag. Each Card comes back with its Cue, Essence, Hints, Tags and whether it is Archived (still kept and searchable, but no longer gets Nudges).
+
+Use it:
+- before you propose a Capture with capture_card: look for a Card on the same subject. If the user already has one, tell them ("you already have a Card on ...") so they avoid a duplicate, and let them decide whether to capture anyway.
+- when the user asks what they saved in KIM about something ("what did I save about X?"): show them the matching Cards.
+
+A Card matches the text when its Cue, Essence or Hints contain every word of it, ignoring case and accents; search with one or two key words of the subject rather than a full sentence, and try a synonym or the other language of the conversation if nothing comes back.`;
+
+/** At most this many Cards come back, so a broad search stays readable. */
+export const SEARCH_RESULTS_MAX = 20;
+
+const searchCardsInput = {
+  text: z
+    .string()
+    .optional()
+    .describe(
+      "Key words the Card must contain in its Cue, Essence or Hints. Leave it out to match any text.",
+    ),
+  tag: z
+    .string()
+    .optional()
+    .describe("A Tag the Card must have. Leave it out to match any Tag."),
+};
+
+function describeCard(card: Card): string {
+  return [
+    `Cue: ${card.cue}`,
+    `Essence: ${card.essence}`,
+    `Hints: ${card.hints || "none"}`,
+    `Tags: ${card.tags.length ? card.tags.join(", ") : "none"}`,
+    `Archived: ${card.archived ? "yes" : "no"}`,
+  ].join("\n");
+}
+
+function searchReport(found: Card[]): string {
+  if (found.length === 0) return "The user has no Card matching this search.";
+  const shown = found.slice(0, SEARCH_RESULTS_MAX);
+  // core.searchCards returns the newest Cards first.
+  const header =
+    found.length > shown.length
+      ? `${found.length} Cards match; here are the ${shown.length} newest. Narrow the search to see others.`
+      : found.length === 1
+        ? "1 Card matches."
+        : `${found.length} Cards match.`;
+  return [header, ...shown.map(describeCard)].join("\n\n");
+}
 
 function characters(text: string | undefined): number {
   return [...(text ?? "")].length;
@@ -156,6 +205,20 @@ export function createKimMcpServer(core: KimCore): McpServer {
           },
         ],
       };
+    },
+  );
+
+  server.registerTool(
+    "search_cards",
+    {
+      title: "Search the user's KIM Cards",
+      description: SEARCH_CARDS_DESCRIPTION,
+      inputSchema: searchCardsInput,
+      annotations: { readOnlyHint: true },
+    },
+    async (search) => {
+      const found = await core.searchCards(search);
+      return { content: [{ type: "text", text: searchReport(found) }] };
     },
   );
 
